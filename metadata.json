@@ -1,0 +1,6 @@
+{
+  "name": "Báo Cáo Bảo Dưỡng Đội Xe",
+  "description": "Dashboard quản lý và báo cáo bảo dưỡng đội xe hàng tháng theo thời gian thực với phân tích chi phí, cảnh báo định kỳ, theo dõi PO theo hạng mục và nhập xuất Excel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
