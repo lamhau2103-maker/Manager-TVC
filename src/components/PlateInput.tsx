@@ -121,7 +121,10 @@ export const PlateInput: React.FC<PlateInputProps> = ({
   const [qRegDueDate, setQRegDueDate] = useState(addDaysISO(REFERENCE_TODAY, 180));
   const [qError, setQError] = useState('');
 
-  const departmentOptions = useMemo(() => buildDepartmentOptions(vehicles), [vehicles]);
+  const departmentOptions = useMemo(
+    () => buildDepartmentOptions(vehicles, { excludeLegacy: true }),
+    [vehicles]
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);

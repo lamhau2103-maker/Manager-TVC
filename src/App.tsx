@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle,
@@ -101,7 +101,8 @@ const DASHBOARD_BLOCK_LABELS: Record<DashboardBlockId, string> = {
 const VALID_APP_PAGES: AppPage[] = ['dashboard', 'orders', 'vehicles', 'po', 'settings'];
 
 function resolveInitialPageFromUrl(isAdmin: boolean): AppPage {
-  if (typeof window === 'undefined') return 'dashboard';
+  const defaultPage: AppPage = isAdmin ? 'dashboard' : 'orders';
+  if (typeof window === 'undefined') return defaultPage;
   const hashRaw = window.location.hash.replace(/^#\/?/, '').trim().toLowerCase();
   const params = new URLSearchParams(window.location.search);
   const queryTab = (params.get('tab') || params.get('page') || '').trim().toLowerCase();
@@ -109,17 +110,29 @@ function resolveInitialPageFromUrl(isAdmin: boolean): AppPage {
   const candidate = (hashRaw || queryTab || pathSeg) as AppPage;
 
   if (VALID_APP_PAGES.includes(candidate)) {
-    if (!isAdmin && candidate === 'settings') {
-      return 'dashboard';
+    if (!isAdmin && (candidate === 'dashboard' || candidate === 'settings')) {
+      return 'orders';
     }
     return candidate;
   }
-  return 'dashboard';
+  return defaultPage;
 }
 
 function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   const { profile, isAdmin, displayName, syncVehiclesForAuth } = useAuth();
-  const store = useFleetStore();
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    window.setTimeout(() => {
+      setToastMsg((curr) => (curr === msg ? null : curr));
+    }, 3600);
+  }, []);
+
+  const store = useFleetStore({
+    actorName: displayName,
+    isAdmin,
+    onSyncError: showToast,
+  });
   const effectiveAdminMode = isAdmin && store.isAdminMode;
   const [activePage, setActivePage] = useState<AppPage>(() =>
     resolveInitialPageFromUrl(isAdmin)
@@ -134,18 +147,23 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     syncVehiclesForAuth(store.vehicles);
   }, [store.vehicles, syncVehiclesForAuth]);
 
-  // Block bypass URL routes (#settings, ?tab=settings, /settings) for role = user
+  // Block bypass URL routes (#dashboard, #settings, ?tab=...) for role = user
   useEffect(() => {
     const enforceRouteGuard = () => {
       const hashRaw = window.location.hash.replace(/^#\/?/, '').trim().toLowerCase();
       const params = new URLSearchParams(window.location.search);
       const queryTab = (params.get('tab') || params.get('page') || '').trim().toLowerCase();
       const pathSeg = window.location.pathname.replace(/^\/+|\/+$/g, '').toLowerCase();
-      const targetsSettings =
-        hashRaw === 'settings' || queryTab === 'settings' || pathSeg === 'settings';
+      const targetsRestricted =
+        hashRaw === 'settings' ||
+        queryTab === 'settings' ||
+        pathSeg === 'settings' ||
+        hashRaw === 'dashboard' ||
+        queryTab === 'dashboard' ||
+        pathSeg === 'dashboard';
 
-      if (!isAdmin && targetsSettings) {
-        setActivePage('dashboard');
+      if (!isAdmin && targetsRestricted) {
+        setActivePage('orders');
         if (window.location.hash || params.has('tab') || params.has('page')) {
           params.delete('tab');
           params.delete('page');
@@ -154,7 +172,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         }
       } else if (
         VALID_APP_PAGES.includes(hashRaw as AppPage) &&
-        (isAdmin || hashRaw !== 'settings')
+        (isAdmin || (hashRaw !== 'settings' && hashRaw !== 'dashboard'))
       ) {
         setActivePage(hashRaw as AppPage);
       }
@@ -171,16 +189,8 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   const [preselectedVehicleId, setPreselectedVehicleId] = useState<string | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [draggingBlockId, setDraggingBlockId] = useState<DashboardBlockId | null>(null);
   const [dragOverBlockId, setDragOverBlockId] = useState<DashboardBlockId | null>(null);
-
-  const showToast = (msg: string) => {
-    setToastMsg(msg);
-    window.setTimeout(() => {
-      setToastMsg((curr) => (curr === msg ? null : curr));
-    }, 3600);
-  };
 
   // Global keyboard shortcuts: Ctrl+K / Cmd+K / "/"
   useEffect(() => {
@@ -377,6 +387,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   };
 
   const openEditOrder = (order: EnrichedOrder) => {
+    if (!isAdmin) return;
     setEditingOrder(order);
     setPreselectedVehicleId(null);
     setOrderModalOpen(true);
@@ -384,8 +395,12 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
 
   const handleFilterByPoAndGoDashboard = (poNumber: string) => {
     updateFilters({ poNumber });
-    if (activePage !== 'dashboard' && activePage !== 'orders') {
-      setActivePage('dashboard');
+    if (isAdmin) {
+      if (activePage !== 'dashboard' && activePage !== 'orders') {
+        setActivePage('dashboard');
+      }
+    } else if (activePage !== 'orders') {
+      setActivePage('orders');
     }
   };
 
@@ -439,12 +454,15 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
       ? NAV_ITEMS
       : NAV_ITEMS.filter((item) => !store.hiddenReportTabs.includes(item.id))
     : NAV_ITEMS.filter(
-        (item) => item.id !== 'settings' && !store.hiddenReportTabs.includes(item.id)
+        (item) =>
+          item.id !== 'dashboard' &&
+          item.id !== 'settings' &&
+          (item.id === 'orders' || !store.hiddenReportTabs.includes(item.id))
       );
 
   const navigateToPage = (page: AppPage) => {
-    if (!isAdmin && page === 'settings') {
-      setActivePage('dashboard');
+    if (!isAdmin && (page === 'dashboard' || page === 'settings')) {
+      setActivePage('orders');
       return;
     }
     setActivePage(page);
@@ -453,12 +471,16 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     setMobileUserMenuOpen(false);
   };
 
-  // Redirect safely to dashboard if active tab is hidden or admin-only
+  // Redirect safely if active tab is hidden or admin-only
   useEffect(() => {
-    const forbiddenForUser = !isAdmin && activePage === 'settings';
-    const hiddenForViewer = !effectiveAdminMode && store.hiddenReportTabs.includes(activePage);
+    const forbiddenForUser =
+      !isAdmin && (activePage === 'dashboard' || activePage === 'settings');
+    const hiddenForViewer =
+      !effectiveAdminMode &&
+      (isAdmin || activePage !== 'orders') &&
+      store.hiddenReportTabs.includes(activePage);
     if (forbiddenForUser || hiddenForViewer) {
-      setActivePage('dashboard');
+      setActivePage(isAdmin ? 'dashboard' : 'orders');
     }
   }, [isAdmin, effectiveAdminMode, store.hiddenReportTabs, activePage]);
 
@@ -1224,7 +1246,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
               className="space-y-4"
             >
-              {activePage === 'dashboard' && (
+              {isAdmin && activePage === 'dashboard' && (
                 <>
                   {/* Admin Visibility Control Bar on Dashboard (only visible to Admin in Admin Mode) */}
                   {effectiveAdminMode && (
@@ -1567,9 +1589,11 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                           )}
                           <OrdersTable
                             orders={currentFiltered.orders}
+                            canModifyOrders={isAdmin}
                             onOpenVehicle={openVehicleProfile}
                             onEditOrder={openEditOrder}
                             onDeleteOrder={(id) => {
+                              if (!isAdmin) return;
                               store.deleteOrder(id);
                               showToast('Đã xóa phiếu bảo dưỡng và ghi nhận vào Nhật ký.');
                             }}
@@ -1681,11 +1705,13 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
 
                   <OrdersTable
                     orders={currentFiltered.orders}
+                    canModifyOrders={isAdmin}
                     title={`Danh sách phiếu bảo dưỡng — ${currentRange.label}`}
                     subtitle="Bấm vào bất kỳ dòng nào để xem danh sách hạng mục, phụ tùng và số PO"
                     onOpenVehicle={openVehicleProfile}
                     onEditOrder={openEditOrder}
                     onDeleteOrder={(id) => {
+                      if (!isAdmin) return;
                       store.deleteOrder(id);
                       showToast('Đã xóa phiếu bảo dưỡng.');
                     }}
@@ -1717,6 +1743,9 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     return res;
                   }}
                   onUpdateVehicle={(id, upd, opts) => {
+                    if (!isAdmin) {
+                      return { ok: false, error: 'Chỉ Admin mới có quyền cập nhật thông tin xe.' };
+                    }
                     const res = store.updateVehicle(id, upd);
                     if (res.ok && !opts?.silent) showToast('Đã cập nhật hồ sơ phương tiện.');
                     return res;
@@ -1724,6 +1753,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                   onOpenNewOrderForVehicle={(vid) => openNewOrder(vid)}
                   onEditOrder={openEditOrder}
                   onDeleteOrder={(id) => {
+                    if (!isAdmin) return;
                     store.deleteOrder(id);
                     showToast('Đã xóa phiếu bảo dưỡng.');
                   }}
@@ -1735,8 +1765,10 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               {activePage === 'po' && (
                 <PoTrackingView
                   filteredItems={currentFiltered.items}
+                  canAssignPo={isAdmin}
                   onFilterByPo={handleFilterByPoAndGoDashboard}
                   onAssignPo={(itemId, po) => {
+                    if (!isAdmin) return;
                     store.assignPoToItem(itemId, po);
                     showToast(`Đã gắn số PO ${po.trim().toUpperCase()} cho hạng mục.`);
                   }}
@@ -1834,7 +1866,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         isOpen={orderModalOpen}
         onClose={() => setOrderModalOpen(false)}
         isAdmin={isAdmin}
-        editingOrder={editingOrder}
+        editingOrder={isAdmin ? editingOrder : null}
         preselectedVehicleId={preselectedVehicleId}
         vehicles={store.vehicles}
         allOrders={store.orders}
@@ -1842,6 +1874,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         onQuickCreateVehicle={handleGuardedAddVehicle}
         onBulkAddPlates={handleGuardedBulkAddPlates}
         onSaveOrder={(orderPayload, itemPayloads) => {
+          if (!isAdmin && orderPayload.id) return;
           store.saveOrder(orderPayload, itemPayloads);
           showToast(
             orderPayload.id
@@ -1850,6 +1883,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
           );
         }}
         onAppendToExistingOrder={(orderId, newItems) => {
+          if (!isAdmin) return;
           store.appendItemsToExistingOrder(orderId, newItems);
           showToast(`Đã gộp ${newItems.length} hạng mục vào phiếu cũ thành công.`);
         }}
@@ -1883,7 +1917,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         onFilterByPo={handleFilterByPoAndGoDashboard}
         onFilterBySearch={(q) => {
           updateFilters({ searchQuery: q });
-          setActivePage('dashboard');
+          setActivePage(isAdmin ? 'dashboard' : 'orders');
         }}
       />
     </div>

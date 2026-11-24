@@ -6,6 +6,7 @@ import { formatCompactVND, formatDateVN, formatVND } from '../utils/format';
 
 interface PoTrackingViewProps {
   filteredItems: Array<MaintenanceItem & { order: MaintenanceOrder; vehicle?: Vehicle }>;
+  canAssignPo?: boolean;
   onFilterByPo: (poNumber: string) => void;
   onAssignPo: (itemId: string, poNumber: string) => void;
   onOpenVehicle: (vehicleId: string, plate?: string) => void;
@@ -13,6 +14,7 @@ interface PoTrackingViewProps {
 
 export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
   filteredItems,
+  canAssignPo = true,
   onFilterByPo,
   onAssignPo,
   onOpenVehicle,
@@ -71,10 +73,14 @@ export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
             <AlertTriangle className="w-4.5 h-4.5 text-amber-600 shrink-0 mt-0.5" />
             <div>
               <h3 className="text-sm font-bold text-amber-950 leading-snug">
-                Hạng mục chưa có số PO ({missingItems.length}) — Bổ sung nhanh tại chỗ
+                {canAssignPo
+                  ? `Hạng mục chưa có số PO (${missingItems.length}) — Bổ sung nhanh tại chỗ`
+                  : `Hạng mục chưa có số PO (${missingItems.length})`}
               </h3>
               <p className="text-[11px] text-amber-800 mt-0.5">
-                Nhập số PO rồi bấm Lưu để cập nhật ngay vào dữ liệu và báo cáo
+                {canAssignPo
+                  ? 'Nhập số PO rồi bấm Lưu để cập nhật ngay vào dữ liệu và báo cáo'
+                  : 'Danh sách các hạng mục đang chờ Quản trị viên cập nhật số PO'}
               </p>
             </div>
           </div>
@@ -113,36 +119,38 @@ export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={val}
-                      onChange={(e) =>
-                        setDraftPos((prev) => ({
-                          ...prev,
-                          [it.id]: e.target.value.toUpperCase(),
-                        }))
-                      }
-                      placeholder="VD: PO-2026-1120"
-                      className="glass-input min-h-[44px] px-3 rounded-xl text-xs font-mono uppercase flex-1 min-w-0"
-                    />
-                    <button
-                      type="button"
-                      disabled={!val.trim()}
-                      onClick={() => {
-                        onAssignPo(it.id, val);
-                        setDraftPos((prev) => {
-                          const next = { ...prev };
-                          delete next[it.id];
-                          return next;
-                        });
-                      }}
-                      className="inline-flex items-center justify-center gap-1 min-h-[44px] px-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-semibold shrink-0 touch-press"
-                    >
-                      <Check className="w-4 h-4" />
-                      Lưu
-                    </button>
-                  </div>
+                  {canAssignPo && (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={val}
+                        onChange={(e) =>
+                          setDraftPos((prev) => ({
+                            ...prev,
+                            [it.id]: e.target.value.toUpperCase(),
+                          }))
+                        }
+                        placeholder="VD: PO-2026-1120"
+                        className="glass-input min-h-[44px] px-3 rounded-xl text-xs font-mono uppercase flex-1 min-w-0"
+                      />
+                      <button
+                        type="button"
+                        disabled={!val.trim()}
+                        onClick={() => {
+                          onAssignPo(it.id, val);
+                          setDraftPos((prev) => {
+                            const next = { ...prev };
+                            delete next[it.id];
+                            return next;
+                          });
+                        }}
+                        className="inline-flex items-center justify-center gap-1 min-h-[44px] px-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-semibold shrink-0 touch-press"
+                      >
+                        <Check className="w-4 h-4" />
+                        Lưu
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -157,7 +165,9 @@ export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
                   <th className="py-2.5 px-3 whitespace-nowrap">Biển số</th>
                   <th className="py-2.5 px-3">Nhóm / Hạng mục</th>
                   <th className="py-2.5 px-3 text-right whitespace-nowrap">Thành tiền</th>
-                  <th className="py-2.5 px-4 whitespace-nowrap">Nhập số PO mới</th>
+                  {canAssignPo && (
+                    <th className="py-2.5 px-4 whitespace-nowrap">Nhập số PO mới</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200/60">
@@ -188,38 +198,40 @@ export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
                       <td className="py-2.5 px-3 text-right font-mono font-bold tabular-nums whitespace-nowrap">
                         {formatVND(it.amount)}
                       </td>
-                      <td className="py-2.5 px-4">
-                        <div className="flex items-center gap-1.5 min-w-[200px] max-w-[240px]">
-                          <input
-                            type="text"
-                            value={val}
-                            onChange={(e) =>
-                              setDraftPos((prev) => ({
-                                ...prev,
-                                [it.id]: e.target.value.toUpperCase(),
-                              }))
-                            }
-                            placeholder="VD: PO-2026-1120"
-                            className="glass-input h-9 px-2.5 rounded-lg text-xs font-mono uppercase w-full"
-                          />
-                          <button
-                            type="button"
-                            disabled={!val.trim()}
-                            onClick={() => {
-                              onAssignPo(it.id, val);
-                              setDraftPos((prev) => {
-                                const next = { ...prev };
-                                delete next[it.id];
-                                return next;
-                              });
-                            }}
-                            className="inline-flex items-center gap-1 h-9 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-semibold shrink-0"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            Lưu
-                          </button>
-                        </div>
-                      </td>
+                      {canAssignPo && (
+                        <td className="py-2.5 px-4">
+                          <div className="flex items-center gap-1.5 min-w-[200px] max-w-[240px]">
+                            <input
+                              type="text"
+                              value={val}
+                              onChange={(e) =>
+                                setDraftPos((prev) => ({
+                                  ...prev,
+                                  [it.id]: e.target.value.toUpperCase(),
+                                }))
+                              }
+                              placeholder="VD: PO-2026-1120"
+                              className="glass-input h-9 px-2.5 rounded-lg text-xs font-mono uppercase w-full"
+                            />
+                            <button
+                              type="button"
+                              disabled={!val.trim()}
+                              onClick={() => {
+                                onAssignPo(it.id, val);
+                                setDraftPos((prev) => {
+                                  const next = { ...prev };
+                                  delete next[it.id];
+                                  return next;
+                                });
+                              }}
+                              className="inline-flex items-center gap-1 h-9 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-semibold shrink-0"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              Lưu
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

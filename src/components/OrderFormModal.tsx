@@ -324,6 +324,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
   );
 
   if (!isOpen) return null;
+  if (!effectiveIsAdmin && editingOrder) return null;
 
   const handleVehicleSelected = (veh: Vehicle) => {
     setSelectedVehicleId(veh.id);
@@ -426,7 +427,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
     onSaveOrder(
       {
-        id: editingOrder?.id,
+        id: effectiveIsAdmin ? editingOrder?.id : undefined,
         vehicle_id: selectedVehicleId,
         service_date: serviceDate,
         odometer_km: numericKm,
@@ -442,7 +443,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
   };
 
   const handleMergeIntoSameDay = () => {
-    if (!sameDayOrder) return;
+    if (!effectiveIsAdmin || !sameDayOrder) return;
     const validDrafts = draftItems.filter((it) => it.item_name.trim().length > 0);
     if (validDrafts.length === 0) {
       setErrorMsg('Hãy nhập ít nhất 1 tên hạng mục trước khi gộp vào phiếu cũ.');
@@ -903,18 +904,23 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                         {formatDateVN(serviceDate)}!
                       </div>
                       <div className="text-amber-800 mt-0.5">
-                        Xưởng: {sameDayOrder.garage} · Loại: {sameDayOrder.service_type}. Có thể gộp hạng mục vào phiếu cũ để tránh trùng phiếu.
+                        Xưởng: {sameDayOrder.garage} · Loại: {sameDayOrder.service_type}.{' '}
+                        {effectiveIsAdmin
+                          ? 'Có thể gộp hạng mục vào phiếu cũ để tránh trùng phiếu.'
+                          : 'Vui lòng kiểm tra lại để tránh tạo trùng phiếu.'}
                       </div>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleMergeIntoSameDay}
-                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs whitespace-nowrap shrink-0 transition-colors"
-                  >
-                    <Layers className="w-3.5 h-3.5" />
-                    Gộp vào phiếu cũ
-                  </button>
+                  {effectiveIsAdmin && (
+                    <button
+                      type="button"
+                      onClick={handleMergeIntoSameDay}
+                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs whitespace-nowrap shrink-0 transition-colors"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      Gộp vào phiếu cũ
+                    </button>
+                  )}
                 </div>
               )}
 

@@ -179,7 +179,10 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
   const [resetPwdMemberTarget, setResetPwdMemberTarget] = useState<MemberProfileRow | null>(null);
   const [deleteMemberTarget, setDeleteMemberTarget] = useState<MemberProfileRow | null>(null);
 
-  const departmentOptions = useMemo(() => buildDepartmentOptions(vehicles), [vehicles]);
+  const departmentOptions = useMemo(
+    () => buildDepartmentOptions(vehicles, { excludeLegacy: true }),
+    [vehicles]
+  );
 
   const refreshMembers = useCallback(async () => {
     if (!isAdmin) return;
@@ -256,6 +259,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
   };
 
   const openEditModal = (v: Vehicle) => {
+    if (!isAdmin) return;
     setEditingVehicle(v);
     setFPlate(v.plate);
     if (VEHICLE_TYPE_PRESETS.includes(v.type)) {
@@ -304,8 +308,12 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
     setFDeptError('');
     setMemberError('');
 
-    // Edit existing vehicle flow
+    // Edit existing vehicle flow (Admin only)
     if (editingVehicle) {
+      if (!isAdmin) {
+        setFError('Chỉ Admin mới có quyền cập nhật thông tin xe.');
+        return;
+      }
       const resolvedType =
         fTypePreset === CUSTOM_TYPE_VALUE ? fCustomType.trim() : fTypePreset;
       if (!resolvedType) {
@@ -514,14 +522,16 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
           </button>
 
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-            <button
-              type="button"
-              onClick={() => openEditModal(activeVehicle)}
-              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl glass-input text-xs font-semibold text-slate-700 touch-press"
-            >
-              <Edit3 className="w-3.5 h-3.5" />
-              Sửa thông tin xe
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => openEditModal(activeVehicle)}
+                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl glass-input text-xs font-semibold text-slate-700 touch-press"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                Sửa thông tin xe
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onOpenNewOrderForVehicle(activeVehicle.id)}
@@ -642,6 +652,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
         {/* Full History Table */}
         <OrdersTable
           orders={profileData.orders}
+          canModifyOrders={isAdmin}
           title={`Lịch sử toàn bộ phiếu bảo dưỡng — ${activeVehicle.plate}`}
           subtitle="Bấm vào từng phiếu để xem đầy đủ hạng mục và số PO"
           onOpenVehicle={(vid) => onSelectVehicle(vid)}
@@ -695,7 +706,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
   });
 
   function renderVehicleModal() {
-    if (!editingVehicle && !isAdmin) return null;
+    if (!isAdmin) return null;
     const previewRegDays = fRegDueDate ? daysBetween(REFERENCE_TODAY, fRegDueDate) : null;
 
     const handleModalFocusCapture = (e: React.FocusEvent<HTMLFormElement>) => {

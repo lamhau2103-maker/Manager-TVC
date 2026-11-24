@@ -12,6 +12,7 @@ import { formatDateVN, formatKm, formatVND } from '../utils/format';
 
 interface OrdersTableProps {
   orders: EnrichedOrder[];
+  canModifyOrders?: boolean;
   onOpenVehicle: (vehicleId: string, plate?: string) => void;
   onEditOrder: (order: EnrichedOrder) => void;
   onDeleteOrder: (orderId: string) => void;
@@ -23,6 +24,7 @@ interface OrdersTableProps {
 
 export const OrdersTable: React.FC<OrdersTableProps> = ({
   orders,
+  canModifyOrders = true,
   onOpenVehicle,
   onEditOrder,
   onDeleteOrder,
@@ -180,46 +182,47 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
                       {isExpanded ? 'Thu gọn hạng mục' : `Xem ${ord.items.length} hạng mục`}
                     </button>
 
-                    {confirmDeleteId === ord.id ? (
-                      <div className="inline-flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onDeleteOrder(ord.id);
-                            setConfirmDeleteId(null);
-                          }}
-                          className="min-h-[40px] px-3 rounded-xl bg-red-600 text-white text-xs font-semibold"
-                        >
-                          Xóa
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteId(null)}
-                          className="min-h-[40px] px-3 rounded-xl bg-slate-200 text-slate-700 text-xs font-semibold"
-                        >
-                          Hủy
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="inline-flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => onEditOrder(ord)}
-                          aria-label="Chỉnh sửa phiếu"
-                          className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-600 hover:text-blue-700 touch-press"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteId(ord.id)}
-                          aria-label="Xóa phiếu"
-                          className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-600 hover:text-red-600 touch-press"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    )}
+                    {canModifyOrders &&
+                      (confirmDeleteId === ord.id ? (
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onDeleteOrder(ord.id);
+                              setConfirmDeleteId(null);
+                            }}
+                            className="min-h-[40px] px-3 rounded-xl bg-red-600 text-white text-xs font-semibold"
+                          >
+                            Xóa
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="min-h-[40px] px-3 rounded-xl bg-slate-200 text-slate-700 text-xs font-semibold"
+                          >
+                            Hủy
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onEditOrder(ord)}
+                            aria-label="Chỉnh sửa phiếu"
+                            className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-600 hover:text-blue-700 touch-press"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(ord.id)}
+                            aria-label="Xóa phiếu"
+                            className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-600 hover:text-red-600 touch-press"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
                   </div>
 
                   {/* Expanded Items Cards on Mobile */}
@@ -293,7 +296,9 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
                   <th className="py-3 px-3 whitespace-nowrap">Số PO (theo hạng mục)</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Hạng mục</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Tổng chi phí</th>
-                  <th className="py-3 pl-2 pr-4 text-right whitespace-nowrap no-print">Thao tác</th>
+                  {canModifyOrders && (
+                    <th className="py-3 pl-2 pr-4 text-right whitespace-nowrap no-print">Thao tác</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/55 text-xs">
@@ -392,57 +397,59 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
                         <td className="py-3 px-3 text-right font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap">
                           {formatVND(ord.totalAmount)}
                         </td>
-                        <td
-                          className="py-3 pl-2 pr-4 text-right whitespace-nowrap no-print"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {confirmDeleteId === ord.id ? (
-                            <div className="inline-flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  onDeleteOrder(ord.id);
-                                  setConfirmDeleteId(null);
-                                }}
-                                className="px-2 py-1 rounded-lg bg-red-600 text-white text-[11px] font-semibold"
-                              >
-                                Xóa
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteId(null)}
-                                className="px-2 py-1 rounded-lg bg-slate-200 text-slate-700 text-[11px] font-semibold"
-                              >
-                                Hủy
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="inline-flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => onEditOrder(ord)}
-                                title="Chỉnh sửa phiếu"
-                                className="p-2 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors"
-                              >
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteId(ord.id)}
-                                title="Xóa phiếu"
-                                className="p-2 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          )}
-                        </td>
+                        {canModifyOrders && (
+                          <td
+                            className="py-3 pl-2 pr-4 text-right whitespace-nowrap no-print"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {confirmDeleteId === ord.id ? (
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onDeleteOrder(ord.id);
+                                    setConfirmDeleteId(null);
+                                  }}
+                                  className="px-2 py-1 rounded-lg bg-red-600 text-white text-[11px] font-semibold"
+                                >
+                                  Xóa
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="px-2 py-1 rounded-lg bg-slate-200 text-slate-700 text-[11px] font-semibold"
+                                >
+                                  Hủy
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => onEditOrder(ord)}
+                                  title="Chỉnh sửa phiếu"
+                                  className="p-2 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(ord.id)}
+                                  title="Xóa phiếu"
+                                  className="p-2 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        )}
                       </tr>
 
                       {/* Expanded Drill-down Items Table */}
                       {isExpanded && (
                         <tr className="bg-white/30">
-                          <td colSpan={9} className="px-5 py-3.5">
+                          <td colSpan={canModifyOrders ? 9 : 8} className="px-5 py-3.5">
                             <div className="space-y-2.5">
                               {ord.note && (
                                 <div className="text-xs text-slate-700">

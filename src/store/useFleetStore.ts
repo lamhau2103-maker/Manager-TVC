@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AppPage,
   AuditLogEntry,
@@ -13,6 +13,7 @@ import { buildSeedDataset, REFERENCE_TODAY, SEED_VEHICLES } from '../data/seedDa
 import { addDaysISO, formatVND, generateId } from '../utils/format';
 import { formatVietnamesePlate, normalizePlateKey } from '../utils/plate';
 import { ParsedImportRow } from '../utils/excel';
+import { supabase } from '../lib/supabaseClient';
 
 export const FLEET_STORAGE_KEY = 'fleet_maintenance_v1_db';
 const STORAGE_KEY = FLEET_STORAGE_KEY;
@@ -60,6 +61,20 @@ interface FleetDatabaseState {
   lastUpdated: string;
 }
 
+interface SharedServerFleetState extends FleetDatabaseState {
+  version: number;
+  monthlyBudget: number;
+  hiddenReportTabs: AppPage[];
+  hiddenDashboardBlocks: DashboardBlockId[];
+  dashboardBlockOrder: DashboardBlockId[];
+}
+
+interface UseFleetStoreOptions {
+  actorName?: string;
+  isAdmin?: boolean;
+  onSyncError?: (message: string) => void;
+}
+
 function loadInitialState(): FleetDatabaseState {
   const seedRegMap = new Map(SEED_VEHICLES.map((v) => [v.plate_key, v.registration_due_date]));
   try {
@@ -71,7 +86,6 @@ function loadInitialState(): FleetDatabaseState {
         Array.isArray(parsed.orders) &&
         Array.isArray(parsed.items)
       ) {
-        // Safely migrate older cached vehicles without registration_due_date
         const migratedVehicles = parsed.vehicles.map((v) => ({
           ...v,
           registration_due_date:
@@ -164,7 +178,20 @@ function loadAdminVisibility(): AdminVisibilityConfig {
   };
 }
 
-export function useFleetStore() {
+async function getAccessToken(): Promise<string | null> {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function useFleetStore(options: UseFleetStoreOptions = {}) {
+  const { actorName = 'Quản lý đội xe', isAdmin = false, onSyncError } = options;
+
   const [db, setDb] = useState<FleetDatabaseState>(() => loadInitialState());
   const [recentPlates, setRecentPlates] = useState<string[]>(() => loadRecentPlates());
   const [monthlyBudget, setMonthlyBudgetState] = useState<number>(() => loadMonthlyBudget());
@@ -173,7 +200,27 @@ export function useFleetStore() {
   );
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Persist to localStorage on every DB mutation
+  const dbRef = useRef(db);
+  dbRef.current = db;
+  const monthlyBudgetRef = useRef(monthlyBudget);
+  monthlyBudgetRef.current = monthlyBudget;
+  const adminVisibilityRef = useRef(adminVisibility);
+  adminVisibilityRef.current = adminVisibility;
+  const onSyncErrorRef = useRef(onSyncError);
+  onSyncErrorRef.current = onSyncError;
+
+  const serverVersionRef = useRef(0);
+  const pendingWritesRef = useRef(0);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Cache to localStorage for fast startup & offline resilience
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
@@ -192,86 +239,303 @@ export function useFleetStore() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(BUDGET_STORAGE_KEY, String(monthlyBudget));
+    } catch {
+      // ignore
+    }
+  }, [monthlyBudget]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(ADMIN_VISIBILITY_KEY, JSON.stringify(adminVisibility));
     } catch {
       // ignore
     }
   }, [adminVisibility]);
 
-  const toggleAdminMode = useCallback(() => {
-    setAdminVisibility((prev) => ({ ...prev, isAdminMode: !prev.isAdminMode }));
-  }, []);
+  const applyServerState = useCallback(
+    (incoming: SharedServerFleetState, force = false) => {
+      if (!incoming || !Array.isArray(incoming.vehicles)) return;
+      const incomingVersion = typeof incoming.version === 'number' ? incoming.version : 0;
+      if (!force && incomingVersion > 0 && incomingVersion < serverVersionRef.current) {
+        return;
+      }
+      if (!force && pendingWritesRef.current > 0 && incomingVersion <= serverVersionRef.current) {
+        return;
+      }
 
-  const toggleReportTabVisibility = useCallback((tab: AppPage) => {
-    if (tab === 'dashboard') return; // Tổng quan luôn hiển thị
-    setAdminVisibility((prev) => {
-      const exists = prev.hiddenReportTabs.includes(tab);
-      return {
-        ...prev,
-        hiddenReportTabs: exists
-          ? prev.hiddenReportTabs.filter((t) => t !== tab)
-          : [...prev.hiddenReportTabs, tab],
-      };
-    });
-  }, []);
+      if (incomingVersion > 0) {
+        serverVersionRef.current = incomingVersion;
+      }
 
-  const toggleDashboardBlockVisibility = useCallback((block: DashboardBlockId) => {
-    setAdminVisibility((prev) => {
-      const exists = prev.hiddenDashboardBlocks.includes(block);
-      return {
-        ...prev,
-        hiddenDashboardBlocks: exists
-          ? prev.hiddenDashboardBlocks.filter((b) => b !== block)
-          : [...prev.hiddenDashboardBlocks, block],
-      };
-    });
-  }, []);
-
-  const moveDashboardBlock = useCallback(
-    (block: DashboardBlockId, direction: 'up' | 'down') => {
-      setAdminVisibility((prev) => {
-        const next = [...prev.dashboardBlockOrder];
-        const idx = next.indexOf(block);
-        if (idx === -1) return prev;
-        const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
-        if (targetIdx < 0 || targetIdx >= next.length) return prev;
-        const [moved] = next.splice(idx, 1);
-        next.splice(targetIdx, 0, moved);
-        return { ...prev, dashboardBlockOrder: next };
+      setDb({
+        vehicles: incoming.vehicles,
+        orders: Array.isArray(incoming.orders) ? incoming.orders : [],
+        items: Array.isArray(incoming.items) ? incoming.items : [],
+        auditLogs: Array.isArray(incoming.auditLogs) ? incoming.auditLogs : [],
+        lastUpdated: incoming.lastUpdated || new Date().toISOString(),
       });
+
+      if (typeof incoming.monthlyBudget === 'number' && incoming.monthlyBudget > 0) {
+        setMonthlyBudgetState(incoming.monthlyBudget);
+      }
+
+      setAdminVisibility((prev) => ({
+        isAdminMode: prev.isAdminMode,
+        hiddenReportTabs: Array.isArray(incoming.hiddenReportTabs)
+          ? incoming.hiddenReportTabs
+          : prev.hiddenReportTabs,
+        hiddenDashboardBlocks: Array.isArray(incoming.hiddenDashboardBlocks)
+          ? incoming.hiddenDashboardBlocks
+          : prev.hiddenDashboardBlocks,
+        dashboardBlockOrder: normalizeBlockOrder(incoming.dashboardBlockOrder),
+      }));
     },
     []
   );
 
-  const reorderDashboardBlocks = useCallback(
-    (sourceBlock: DashboardBlockId, targetBlock: DashboardBlockId) => {
-      if (sourceBlock === targetBlock) return;
-      setAdminVisibility((prev) => {
-        const next = [...prev.dashboardBlockOrder];
-        const fromIdx = next.indexOf(sourceBlock);
-        const toIdx = next.indexOf(targetBlock);
-        if (fromIdx === -1 || toIdx === -1) return prev;
-        const [moved] = next.splice(fromIdx, 1);
-        next.splice(toIdx, 0, moved);
-        return { ...prev, dashboardBlockOrder: next };
-      });
+  const syncFromServer = useCallback(
+    async (opts?: { allowBootstrap?: boolean; force?: boolean; showSpinner?: boolean }) => {
+      const token = await getAccessToken();
+      if (!token) return;
+
+      if (opts?.showSpinner) setIsSyncing(true);
+      try {
+        const res = await fetch('/api/fleet/state', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          cache: 'no-store',
+        });
+
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          initialized?: boolean;
+          state?: SharedServerFleetState | null;
+        };
+
+        if (!isMountedRef.current) return;
+
+        if (!data.initialized && opts?.allowBootstrap) {
+          const currentDb = dbRef.current;
+          const currentVis = adminVisibilityRef.current;
+          const bootRes = await fetch('/api/fleet/bootstrap', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              vehicles: currentDb.vehicles,
+              orders: currentDb.orders,
+              items: currentDb.items,
+              auditLogs: currentDb.auditLogs,
+              monthlyBudget: monthlyBudgetRef.current,
+              hiddenReportTabs: currentVis.hiddenReportTabs,
+              hiddenDashboardBlocks: currentVis.hiddenDashboardBlocks,
+              dashboardBlockOrder: currentVis.dashboardBlockOrder,
+            }),
+          });
+          if (bootRes.ok) {
+            const bootData = (await bootRes.json()) as { state?: SharedServerFleetState | null };
+            if (bootData.state && isMountedRef.current) {
+              applyServerState(bootData.state, true);
+            }
+          }
+          return;
+        }
+
+        if (data.state) {
+          applyServerState(data.state, Boolean(opts?.force));
+        }
+      } catch {
+        // Network issue; retain cached view until reconnect
+      } finally {
+        if (opts?.showSpinner && isMountedRef.current) {
+          window.setTimeout(() => {
+            if (isMountedRef.current) setIsSyncing(false);
+          }, 260);
+        }
+      }
     },
-    []
+    [applyServerState]
   );
 
-  const resetReportVisibility = useCallback(() => {
-    setAdminVisibility((prev) => ({
-      ...prev,
-      hiddenReportTabs: [],
-      hiddenDashboardBlocks: [],
-      dashboardBlockOrder: [...DEFAULT_DASHBOARD_BLOCK_ORDER],
-    }));
-  }, []);
+  const sendMutation = useCallback(
+    async (
+      url: string,
+      method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+      body?: unknown
+    ): Promise<void> => {
+      const token = await getAccessToken();
+      if (!token) {
+        onSyncErrorRef.current?.('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+        return;
+      }
 
-  // Listen to storage events across browser tabs for instant multi-tab sync
+      pendingWritesRef.current += 1;
+      try {
+        const res = await fetch(url, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+
+        const payload = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          state?: SharedServerFleetState;
+        };
+
+        if (!res.ok) {
+          if (payload.error) {
+            onSyncErrorRef.current?.(payload.error);
+          } else {
+            onSyncErrorRef.current?.('Không thể đồng bộ thay đổi lên máy chủ.');
+          }
+          await syncFromServer({ force: true });
+          return;
+        }
+
+        if (payload.state && isMountedRef.current) {
+          applyServerState(payload.state, true);
+        }
+      } catch {
+        onSyncErrorRef.current?.('Mất kết nối máy chủ — đang đồng bộ lại dữ liệu.');
+        await syncFromServer({ force: true });
+      } finally {
+        pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+      }
+    },
+    [applyServerState, syncFromServer]
+  );
+
+  // Initial hydration + Real-time SSE cross-device stream + focus/visibility/periodic fallback sync
+  useEffect(() => {
+    let active = true;
+    let eventSource: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+    let retryDelay = 1500;
+
+    const closeStream = () => {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const connectStream = async () => {
+      if (!active) return;
+      closeStream();
+
+      const token = await getAccessToken();
+      if (!token || !active) return;
+
+      try {
+        const ticketRes = await fetch('/api/fleet/sse-ticket', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (!ticketRes.ok || !active) {
+          scheduleReconnect();
+          return;
+        }
+
+        const { ticket } = (await ticketRes.json()) as { ticket?: string };
+        if (!ticket || !active) {
+          scheduleReconnect();
+          return;
+        }
+
+        const es = new EventSource(`/api/fleet/stream?ticket=${encodeURIComponent(ticket)}`);
+        eventSource = es;
+
+        es.addEventListener('connected', (event) => {
+          retryDelay = 1500;
+          try {
+            const meta = JSON.parse((event as MessageEvent).data) as { version?: number };
+            if (typeof meta.version === 'number' && meta.version > serverVersionRef.current) {
+              void syncFromServer({ force: false });
+            }
+          } catch {
+            // ignore
+          }
+        });
+
+        es.addEventListener('fleet-update', (event) => {
+          try {
+            const incoming = JSON.parse((event as MessageEvent).data) as SharedServerFleetState;
+            applyServerState(incoming, false);
+          } catch {
+            // ignore malformed event
+          }
+        });
+
+        es.onerror = () => {
+          if (!active) return;
+          closeStream();
+          scheduleReconnect();
+        };
+      } catch {
+        scheduleReconnect();
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (!active) return;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      reconnectTimer = window.setTimeout(() => {
+        retryDelay = Math.min(15_000, Math.round(retryDelay * 1.8));
+        void connectStream();
+      }, retryDelay);
+    };
+
+    void syncFromServer({ allowBootstrap: true, force: true }).then(() => {
+      if (active) void connectStream();
+    });
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void syncFromServer({ force: false });
+        if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+          void connectStream();
+        }
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('online', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    const pollId = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && pendingWritesRef.current === 0) {
+        void syncFromServer({ force: false });
+      }
+    }, 15_000);
+
+    return () => {
+      active = false;
+      closeStream();
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('online', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.clearInterval(pollId);
+    };
+  }, [applyServerState, syncFromServer]);
+
+  // Same-browser multi-tab fallback listener
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY && e.newValue) {
+      if (e.key === STORAGE_KEY && e.newValue && pendingWritesRef.current === 0) {
         try {
           const next = JSON.parse(e.newValue) as FleetDatabaseState;
           setDb(next);
@@ -284,57 +548,142 @@ export function useFleetStore() {
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  const refreshData = useCallback(() => {
-    setIsSyncing(true);
-    setDb((prev) => ({
-      ...prev,
-      lastUpdated: new Date().toISOString(),
-    }));
-    window.setTimeout(() => setIsSyncing(false), 380);
+  const persistVisibilityToServer = useCallback(
+    (nextVis: AdminVisibilityConfig) => {
+      if (!isAdmin) return;
+      void sendMutation('/api/fleet/visibility', 'PUT', {
+        hiddenReportTabs: nextVis.hiddenReportTabs,
+        hiddenDashboardBlocks: nextVis.hiddenDashboardBlocks,
+        dashboardBlockOrder: nextVis.dashboardBlockOrder,
+      });
+    },
+    [isAdmin, sendMutation]
+  );
+
+  const toggleAdminMode = useCallback(() => {
+    setAdminVisibility((prev) => ({ ...prev, isAdminMode: !prev.isAdminMode }));
   }, []);
 
-  // Auto-refresh every 60 seconds when not connected to Supabase realtime
-  useEffect(() => {
-    const id = window.setInterval(() => {
+  const toggleReportTabVisibility = useCallback(
+    (tab: AppPage) => {
+      if (!isAdmin || tab === 'dashboard') return;
+      const prev = adminVisibilityRef.current;
+      const exists = prev.hiddenReportTabs.includes(tab);
+      const next: AdminVisibilityConfig = {
+        ...prev,
+        hiddenReportTabs: exists
+          ? prev.hiddenReportTabs.filter((t) => t !== tab)
+          : [...prev.hiddenReportTabs, tab],
+      };
+      setAdminVisibility(next);
+      persistVisibilityToServer(next);
+    },
+    [isAdmin, persistVisibilityToServer]
+  );
+
+  const toggleDashboardBlockVisibility = useCallback(
+    (block: DashboardBlockId) => {
+      if (!isAdmin) return;
+      const prev = adminVisibilityRef.current;
+      const exists = prev.hiddenDashboardBlocks.includes(block);
+      const next: AdminVisibilityConfig = {
+        ...prev,
+        hiddenDashboardBlocks: exists
+          ? prev.hiddenDashboardBlocks.filter((b) => b !== block)
+          : [...prev.hiddenDashboardBlocks, block],
+      };
+      setAdminVisibility(next);
+      persistVisibilityToServer(next);
+    },
+    [isAdmin, persistVisibilityToServer]
+  );
+
+  const moveDashboardBlock = useCallback(
+    (block: DashboardBlockId, direction: 'up' | 'down') => {
+      if (!isAdmin) return;
+      const prev = adminVisibilityRef.current;
+      const nextOrder = [...prev.dashboardBlockOrder];
+      const idx = nextOrder.indexOf(block);
+      if (idx === -1) return;
+      const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= nextOrder.length) return;
+      const [moved] = nextOrder.splice(idx, 1);
+      nextOrder.splice(targetIdx, 0, moved);
+      const next: AdminVisibilityConfig = { ...prev, dashboardBlockOrder: nextOrder };
+      setAdminVisibility(next);
+      persistVisibilityToServer(next);
+    },
+    [isAdmin, persistVisibilityToServer]
+  );
+
+  const reorderDashboardBlocks = useCallback(
+    (sourceBlock: DashboardBlockId, targetBlock: DashboardBlockId) => {
+      if (!isAdmin || sourceBlock === targetBlock) return;
+      const prev = adminVisibilityRef.current;
+      const nextOrder = [...prev.dashboardBlockOrder];
+      const fromIdx = nextOrder.indexOf(sourceBlock);
+      const toIdx = nextOrder.indexOf(targetBlock);
+      if (fromIdx === -1 || toIdx === -1) return;
+      const [moved] = nextOrder.splice(fromIdx, 1);
+      nextOrder.splice(toIdx, 0, moved);
+      const next: AdminVisibilityConfig = { ...prev, dashboardBlockOrder: nextOrder };
+      setAdminVisibility(next);
+      persistVisibilityToServer(next);
+    },
+    [isAdmin, persistVisibilityToServer]
+  );
+
+  const resetReportVisibility = useCallback(() => {
+    if (!isAdmin) return;
+    const prev = adminVisibilityRef.current;
+    const next: AdminVisibilityConfig = {
+      ...prev,
+      hiddenReportTabs: [],
+      hiddenDashboardBlocks: [],
+      dashboardBlockOrder: [...DEFAULT_DASHBOARD_BLOCK_ORDER],
+    };
+    setAdminVisibility(next);
+    persistVisibilityToServer(next);
+  }, [isAdmin, persistVisibilityToServer]);
+
+  const refreshData = useCallback(() => {
+    void syncFromServer({ force: true, showSpinner: true });
+  }, [syncFromServer]);
+
+  const setMonthlyBudget = useCallback(
+    (nextBudget: number, actor = actorName) => {
+      if (!isAdmin) return;
+      const clean = Math.max(1_000_000, Math.round(nextBudget));
+      setMonthlyBudgetState(clean);
+      const now = new Date().toISOString();
       setDb((prev) => ({
         ...prev,
-        lastUpdated: new Date().toISOString(),
+        auditLogs: [
+          {
+            id: generateId('log'),
+            timestamp: now,
+            actor,
+            action: 'UPDATE',
+            entity: 'system',
+            summary: `Cập nhật ngân sách bảo dưỡng tháng thành ${formatVND(clean)}`,
+          },
+          ...prev.auditLogs,
+        ],
+        lastUpdated: now,
       }));
-    }, 60_000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  const setMonthlyBudget = useCallback((nextBudget: number, actor = 'Quản lý đội xe') => {
-    const clean = Math.max(1_000_000, Math.round(nextBudget));
-    setMonthlyBudgetState(clean);
-    try {
-      localStorage.setItem(BUDGET_STORAGE_KEY, String(clean));
-    } catch {
-      // ignore
-    }
-    const now = new Date().toISOString();
-    setDb((prev) => ({
-      ...prev,
-      auditLogs: [
-        {
-          id: generateId('log'),
-          timestamp: now,
-          actor,
-          action: 'UPDATE',
-          entity: 'system',
-          summary: `Cập nhật ngân sách bảo dưỡng tháng thành ${formatVND(clean)}`,
-        },
-        ...prev.auditLogs,
-      ],
-      lastUpdated: now,
-    }));
-  }, []);
+      void sendMutation('/api/fleet/budget', 'PUT', { monthlyBudget: clean });
+    },
+    [actorName, isAdmin, sendMutation]
+  );
 
   const pushRecentPlate = useCallback((plate: string) => {
     const formatted = formatVietnamesePlate(plate);
     if (!formatted) return;
     setRecentPlates((prev) => {
-      const next = [formatted, ...prev.filter((p) => normalizePlateKey(p) !== normalizePlateKey(formatted))];
+      const next = [
+        formatted,
+        ...prev.filter((p) => normalizePlateKey(p) !== normalizePlateKey(formatted)),
+      ];
       return next.slice(0, 5);
     });
   }, []);
@@ -342,14 +691,17 @@ export function useFleetStore() {
   const addVehicle = useCallback(
     (
       payload: Omit<Vehicle, 'id' | 'plate_key'>,
-      actor = 'Quản lý đội xe'
+      actor = actorName
     ): { ok: true; vehicle: Vehicle } | { ok: false; error: string } => {
+      if (!isAdmin) {
+        return { ok: false, error: 'Chỉ Admin mới có quyền thêm xe mới.' };
+      }
       const formattedPlate = formatVietnamesePlate(payload.plate);
       const plateKey = normalizePlateKey(formattedPlate);
       if (!plateKey) {
         return { ok: false, error: 'Biển số không được để trống.' };
       }
-      const dup = db.vehicles.find((v) => v.plate_key === plateKey);
+      const dup = dbRef.current.vehicles.find((v) => v.plate_key === plateKey);
       if (dup) {
         return { ok: false, error: `Biển số ${dup.plate} đã tồn tại trong hệ thống.` };
       }
@@ -378,9 +730,10 @@ export function useFleetStore() {
         lastUpdated: new Date().toISOString(),
       }));
 
+      void sendMutation('/api/fleet/vehicles', 'POST', { vehicle: newVehicle });
       return { ok: true, vehicle: newVehicle };
     },
-    [db.vehicles]
+    [actorName, isAdmin, sendMutation]
   );
 
   const bulkAddPlates = useCallback(
@@ -388,16 +741,18 @@ export function useFleetStore() {
       rawEntries: string[],
       defaultType: VehicleType = 'Xe tải',
       defaultDepartment: string = DEPARTMENTS[0],
-      actor = 'Admin đội xe'
+      actor = actorName
     ): { added: Vehicle[]; skipped: string[] } => {
-      const existingKeys = new Set(db.vehicles.map((v) => v.plate_key));
+      if (!isAdmin) {
+        return { added: [], skipped: rawEntries };
+      }
+      const existingKeys = new Set(dbRef.current.vehicles.map((v) => v.plate_key));
       const added: Vehicle[] = [];
       const skipped: string[] = [];
 
       for (const raw of rawEntries) {
         const trimmed = raw.trim();
         if (!trimmed) continue;
-        // Support optional "BIỂN SỐ | LOẠI XE | TÀI XẾ" or plain plate per line
         const parts = trimmed.split(/[|\t]/).map((p) => p.trim());
         const formattedPlate = formatVietnamesePlate(parts[0] || '');
         const plateKey = normalizePlateKey(formattedPlate);
@@ -441,7 +796,11 @@ export function useFleetStore() {
           action: 'CREATE',
           entity: 'vehicle',
           summary: `Admin nạp danh sách ${added.length} biển số xe mới`,
-          details: added.map((v) => v.plate).slice(0, 8).join(', ') + (added.length > 8 ? '...' : ''),
+          details:
+            added
+              .map((v) => v.plate)
+              .slice(0, 8)
+              .join(', ') + (added.length > 8 ? '...' : ''),
         };
 
         setDb((prev) => ({
@@ -450,20 +809,25 @@ export function useFleetStore() {
           auditLogs: [log, ...prev.auditLogs],
           lastUpdated: now,
         }));
+
+        void sendMutation('/api/fleet/vehicles/bulk', 'POST', { vehicles: added });
       }
 
       return { added, skipped };
     },
-    [db.vehicles]
+    [actorName, isAdmin, sendMutation]
   );
 
   const updateVehicle = useCallback(
     (
       vehicleId: string,
       updates: Partial<Omit<Vehicle, 'id' | 'plate_key'>>,
-      actor = 'Quản lý đội xe'
+      actor = actorName
     ): { ok: boolean; error?: string } => {
-      const target = db.vehicles.find((v) => v.id === vehicleId);
+      if (!isAdmin) {
+        return { ok: false, error: 'Chỉ Admin mới có quyền cập nhật thông tin xe.' };
+      }
+      const target = dbRef.current.vehicles.find((v) => v.id === vehicleId);
       if (!target) return { ok: false, error: 'Không tìm thấy xe.' };
 
       const nextPlate = updates.plate ? formatVietnamesePlate(updates.plate) : target.plate;
@@ -471,7 +835,7 @@ export function useFleetStore() {
 
       if (
         nextPlateKey !== target.plate_key &&
-        db.vehicles.some((v) => v.id !== vehicleId && v.plate_key === nextPlateKey)
+        dbRef.current.vehicles.some((v) => v.id !== vehicleId && v.plate_key === nextPlateKey)
       ) {
         return { ok: false, error: `Biển số ${nextPlate} đã tồn tại.` };
       }
@@ -500,19 +864,27 @@ export function useFleetStore() {
         lastUpdated: new Date().toISOString(),
       }));
 
+      void sendMutation(`/api/fleet/vehicles/${encodeURIComponent(vehicleId)}`, 'PATCH', {
+        updates,
+      });
       return { ok: true };
     },
-    [db.vehicles]
+    [actorName, isAdmin, sendMutation]
   );
 
   const saveOrder = useCallback(
     (
       orderPayload: Omit<MaintenanceOrder, 'id' | 'created_at' | 'updated_at'> & { id?: string },
       itemPayloads: Array<Omit<MaintenanceItem, 'id' | 'order_id'> & { id?: string }>,
-      actor = 'Quản lý đội xe'
+      actor = actorName
     ) => {
-      const now = new Date().toISOString();
       const isEdit = Boolean(orderPayload.id);
+      if (isEdit && !isAdmin) {
+        onSyncErrorRef.current?.('Bạn không có quyền chỉnh sửa phiếu bảo dưỡng.');
+        return '';
+      }
+
+      const now = new Date().toISOString();
       const orderId = orderPayload.id || generateId('ord');
 
       const nextOrder: MaintenanceOrder = {
@@ -526,7 +898,7 @@ export function useFleetStore() {
         service_type: orderPayload.service_type,
         note: orderPayload.note,
         created_at: isEdit
-          ? db.orders.find((o) => o.id === orderId)?.created_at || now
+          ? dbRef.current.orders.find((o) => o.id === orderId)?.created_at || now
           : now,
         updated_at: now,
       };
@@ -545,8 +917,10 @@ export function useFleetStore() {
       }));
 
       const totalAmount = nextItems.reduce((s, it) => s + it.amount, 0);
-      const vehicle = db.vehicles.find((v) => v.id === nextOrder.vehicle_id);
-      const poList = Array.from(new Set(nextItems.map((i) => i.po_number).filter(Boolean))).join(', ');
+      const vehicle = dbRef.current.vehicles.find((v) => v.id === nextOrder.vehicle_id);
+      const poList = Array.from(new Set(nextItems.map((i) => i.po_number).filter(Boolean))).join(
+        ', '
+      );
 
       const log: AuditLogEntry = {
         id: generateId('log'),
@@ -566,7 +940,6 @@ export function useFleetStore() {
         const otherItems = prev.items.filter((it) => it.order_id !== orderId);
         const items = [...nextItems, ...otherItems];
 
-        // Scientifically sync vehicle odometer, km cycle, and next service km/date
         const vehicles = prev.vehicles.map((v) => {
           if (v.id !== nextOrder.vehicle_id) return v;
           const updatedKm =
@@ -603,21 +976,34 @@ export function useFleetStore() {
         };
       });
 
+      if (isEdit) {
+        void sendMutation(`/api/fleet/orders/${encodeURIComponent(orderId)}`, 'PUT', {
+          order: nextOrder,
+          items: nextItems,
+        });
+      } else {
+        void sendMutation('/api/fleet/orders', 'POST', {
+          order: nextOrder,
+          items: nextItems,
+        });
+      }
+
       return orderId;
     },
-    [db.orders, db.vehicles]
+    [actorName, isAdmin, sendMutation]
   );
 
   const appendItemsToExistingOrder = useCallback(
     (
       orderId: string,
       newItems: Array<Omit<MaintenanceItem, 'id' | 'order_id'>>,
-      actor = 'Quản lý đội xe'
+      actor = actorName
     ) => {
+      if (!isAdmin) return;
       const now = new Date().toISOString();
-      const targetOrder = db.orders.find((o) => o.id === orderId);
+      const targetOrder = dbRef.current.orders.find((o) => o.id === orderId);
       if (!targetOrder) return;
-      const veh = db.vehicles.find((v) => v.id === targetOrder.vehicle_id);
+      const veh = dbRef.current.vehicles.find((v) => v.id === targetOrder.vehicle_id);
 
       const created: MaintenanceItem[] = newItems.map((it) => ({
         ...it,
@@ -643,16 +1029,21 @@ export function useFleetStore() {
         auditLogs: [log, ...prev.auditLogs],
         lastUpdated: now,
       }));
+
+      void sendMutation(`/api/fleet/orders/${encodeURIComponent(orderId)}/items`, 'POST', {
+        items: created,
+      });
     },
-    [db.orders, db.vehicles]
+    [actorName, isAdmin, sendMutation]
   );
 
   const deleteOrder = useCallback(
-    (orderId: string, actor = 'Quản lý đội xe') => {
-      const target = db.orders.find((o) => o.id === orderId);
+    (orderId: string, actor = actorName) => {
+      if (!isAdmin) return;
+      const target = dbRef.current.orders.find((o) => o.id === orderId);
       if (!target) return;
-      const veh = db.vehicles.find((v) => v.id === target.vehicle_id);
-      const removedItems = db.items.filter((i) => i.order_id === orderId);
+      const veh = dbRef.current.vehicles.find((v) => v.id === target.vehicle_id);
+      const removedItems = dbRef.current.items.filter((i) => i.order_id === orderId);
       const total = removedItems.reduce((s, i) => s + i.amount, 0);
 
       const log: AuditLogEntry = {
@@ -672,14 +1063,17 @@ export function useFleetStore() {
         auditLogs: [log, ...prev.auditLogs],
         lastUpdated: new Date().toISOString(),
       }));
+
+      void sendMutation(`/api/fleet/orders/${encodeURIComponent(orderId)}`, 'DELETE');
     },
-    [db.items, db.orders, db.vehicles]
+    [actorName, isAdmin, sendMutation]
   );
 
   const assignPoToItem = useCallback(
-    (itemId: string, poNumber: string, actor = 'Quản lý đội xe') => {
+    (itemId: string, poNumber: string, actor = actorName) => {
+      if (!isAdmin) return;
       const cleanPo = poNumber.trim().toUpperCase();
-      const target = db.items.find((i) => i.id === itemId);
+      const target = dbRef.current.items.find((i) => i.id === itemId);
       if (!target) return;
 
       const log: AuditLogEntry = {
@@ -698,12 +1092,17 @@ export function useFleetStore() {
         auditLogs: [log, ...prev.auditLogs],
         lastUpdated: new Date().toISOString(),
       }));
+
+      void sendMutation(`/api/fleet/items/${encodeURIComponent(itemId)}/po`, 'PATCH', {
+        poNumber: cleanPo,
+      });
     },
-    [db.items]
+    [actorName, isAdmin, sendMutation]
   );
 
   const upsertImportRows = useCallback(
-    (rows: ParsedImportRow[], actor = 'Quản lý đội xe') => {
+    (rows: ParsedImportRow[], actor = actorName) => {
+      if (!isAdmin) return { inserted: 0, updated: 0, createdVehicles: 0 };
       const validRows = rows.filter((r) => r.status !== 'error');
       if (validRows.length === 0) return { inserted: 0, updated: 0, createdVehicles: 0 };
 
@@ -720,7 +1119,6 @@ export function useFleetStore() {
         const vehByPlateKey = new Map(vehicles.map((v) => [v.plate_key, v]));
 
         for (const row of validRows) {
-          // 1. Ensure vehicle exists
           let veh = vehByPlateKey.get(row.plate_key);
           if (!veh) {
             veh = {
@@ -730,7 +1128,7 @@ export function useFleetStore() {
               type: 'Xe bán tải',
               brand_model: 'Chưa cập nhật',
               driver_name: row.driver_name || 'Chưa phân công',
-              department: 'Vận tải Miền Nam',
+              department: 'Văn Phòng HCM',
               status: 'Đang hoạt động',
               registration_due_date: addDaysISO(REFERENCE_TODAY, 180),
               current_km: row.odometer_km || 0,
@@ -751,7 +1149,6 @@ export function useFleetStore() {
             }
           }
 
-          // 2. Find or create order (same vehicle_id + service_date)
           let order = orders.find(
             (o) => o.vehicle_id === veh!.id && o.service_date === row.service_date
           );
@@ -781,7 +1178,6 @@ export function useFleetStore() {
             order = orders[oIdx];
           }
 
-          // 3. UPSERT item by (order_id + item_name + po_number)
           const existingIdx = items.findIndex(
             (it) =>
               it.order_id === order!.id &&
@@ -839,12 +1235,14 @@ export function useFleetStore() {
         };
       });
 
+      void sendMutation('/api/fleet/import', 'POST', { rows: validRows });
       return { inserted, updated, createdVehicles };
     },
-    []
+    [actorName, isAdmin, sendMutation]
   );
 
   const resetDemoData = useCallback(() => {
+    if (!isAdmin) return;
     const seed = buildSeedDataset();
     const now = new Date().toISOString();
     setDb({
@@ -853,7 +1251,7 @@ export function useFleetStore() {
         {
           id: generateId('log'),
           timestamp: now,
-          actor: 'Quản lý đội xe',
+          actor: actorName,
           action: 'UPDATE',
           entity: 'system',
           summary: 'Khôi phục dữ liệu mẫu ban đầu (15 xe, 55 phiếu)',
@@ -862,7 +1260,8 @@ export function useFleetStore() {
       ],
       lastUpdated: now,
     });
-  }, []);
+    void sendMutation('/api/fleet/reset', 'POST', seed);
+  }, [actorName, isAdmin, sendMutation]);
 
   return {
     vehicles: db.vehicles,
