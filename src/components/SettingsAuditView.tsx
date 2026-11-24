@@ -156,7 +156,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                 Nguồn dữ liệu & Kiến trúc 3 bảng quan hệ
               </h3>
               <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-                Đang lưu trữ cục bộ (localStorage + đồng bộ đa tab) với đúng cấu trúc sẵn sàng kết nối Supabase Realtime
+                Đồng bộ dữ liệu thời gian thực lên Supabase Realtime giữa mọi thiết bị, kèm bộ nhớ đệm cục bộ để phản hồi tức thì
               </p>
             </div>
           </div>
@@ -544,8 +544,38 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+        {/* Mobile Audit Cards (< 640px) */}
+        <div className="sm:hidden divide-y divide-slate-200/60">
+          {visibleLogs.length === 0 ? (
+            <div className="py-8 px-4 text-center text-xs text-slate-500">
+              Chưa có nhật ký thay đổi phù hợp.
+            </div>
+          ) : (
+            visibleLogs.map((log) => (
+              <div key={log.id} className="p-3.5 space-y-1.5 bg-white/30">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <span className={`font-bold ${actionMeta[log.action].color}`}>
+                    {actionMeta[log.action].label}
+                  </span>
+                  <span className="font-mono text-slate-500 tabular-nums">
+                    {formatDateTimeVN(log.timestamp)}
+                  </span>
+                </div>
+                <div className="text-xs font-semibold text-slate-900 break-words leading-snug">
+                  {log.summary}
+                </div>
+                <div className="text-[11px] text-slate-600 break-words">
+                  <span className="font-semibold text-slate-800">{log.actor}</span>
+                  {log.details ? ` · ${log.details}` : ''}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Tablet & Desktop Audit Table (>= 640px) */}
+        <div className="hidden sm:block overflow-x-auto">
+          <table className="w-full min-w-[700px] text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200/80 bg-slate-50/75 text-[11px] font-semibold text-slate-500">
                 <th className="sticky-col-left-head py-3 px-4 whitespace-nowrap">Thời gian</th>

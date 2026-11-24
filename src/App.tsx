@@ -965,7 +965,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         <header className="px-3 sm:px-6 pt-3 sm:pt-4 pb-2 space-y-2.5 sm:space-y-0 no-print safe-top">
           {/* Mobile Compact Top Strip (< 640px) */}
           <div className="flex sm:hidden items-center justify-between gap-2 relative">
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
               <div className="w-9 h-9 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden">
                 <img
                   src={COMPANY_LOGO_SRC}
@@ -973,11 +973,11 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                   className="w-full h-full object-contain"
                 />
               </div>
-              <div className="min-w-0">
-                <div className="text-[11px] font-extrabold tracking-[-0.02em] text-slate-900 leading-tight">
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-extrabold tracking-[-0.02em] text-slate-900 leading-tight truncate">
                   THAI VIET CORPORATION
                 </div>
-                <div className="text-[11px] font-medium text-slate-600 leading-tight">
+                <div className="text-[11px] font-medium text-slate-600 leading-tight truncate">
                   {activePage === 'dashboard' && 'BÁO CÁO BẢO DƯỠNG ĐỘI XE'}
                   {activePage === 'orders' && 'Phiếu bảo dưỡng'}
                   {activePage === 'vehicles' && (selectedVehicleId ? 'Hồ sơ phương tiện' : 'Đội xe & Hồ sơ')}
@@ -991,9 +991,9 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               <button
                 type="button"
                 onClick={() => openNewOrder()}
-                className="inline-flex items-center gap-1 min-h-[44px] px-3 rounded-xl glass-button-primary text-white text-xs font-bold whitespace-nowrap touch-press"
+                className="inline-flex items-center gap-1 min-h-[42px] px-2.5 rounded-xl glass-button-primary text-white text-[11px] font-bold whitespace-nowrap touch-press"
               >
-                <Plus className="w-4 h-4 shrink-0" />
+                <Plus className="w-3.5 h-3.5 shrink-0" />
                 <span>Thêm phiếu</span>
               </button>
 
@@ -1001,7 +1001,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 type="button"
                 onClick={() => setMobileUserMenuOpen((prev) => !prev)}
                 aria-label="Tài khoản và đăng xuất"
-                className={`min-w-[44px] min-h-[44px] rounded-xl glass-panel flex items-center justify-center touch-press ${
+                className={`min-w-[42px] min-h-[42px] rounded-xl glass-panel flex items-center justify-center touch-press ${
                   isAdmin ? 'text-blue-700' : 'text-emerald-700'
                 }`}
               >
@@ -1123,8 +1123,8 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
           </button>
 
           {/* Tablet & Desktop Top Bar (>= 640px) */}
-          <div className="hidden sm:flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
+          <div className="hidden sm:flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5">
+            <div className="flex items-center gap-2.5 min-w-[200px] flex-1">
               <button
                 type="button"
                 onClick={() => setTabletDrawerOpen(true)}
@@ -1133,7 +1133,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               >
                 <Menu className="w-5 h-5" />
               </button>
-              <h1 className="fluid-page-title font-extrabold tracking-tight text-slate-900 break-words">
+              <h1 className="fluid-page-title font-extrabold tracking-tight text-slate-900 break-words leading-snug">
                 {activePage === 'dashboard' && 'BÁO CÁO BẢO DƯỠNG ĐỘI XE'}
                 {activePage === 'orders' && 'Danh sách phiếu bảo dưỡng'}
                 {activePage === 'vehicles' &&
@@ -1143,17 +1143,17 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               </h1>
             </div>
 
-            <div className="flex items-center gap-2.5 shrink-0">
+            <div className="flex items-center gap-2 shrink-0 max-w-full">
               <button
                 type="button"
                 onClick={() => setSearchModalOpen(true)}
-                className="flex items-center justify-between gap-3 w-56 md:w-72 lg:w-80 min-h-[44px] px-3.5 rounded-xl glass-input text-xs text-slate-500 hover:text-slate-800 shrink-0 touch-press"
+                className="flex items-center justify-between gap-2.5 w-44 md:w-64 lg:w-72 xl:w-80 min-w-0 min-h-[42px] px-3 rounded-xl glass-input text-xs text-slate-500 hover:text-slate-800 touch-press"
               >
                 <span className="inline-flex items-center gap-2 min-w-0 truncate">
                   <Search className="w-4 h-4 text-slate-400 shrink-0" />
                   <span className="truncate">Tìm nhanh biển số, PO, hạng mục...</span>
                 </span>
-                <kbd className="hidden lg:inline-block font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-200/80 text-slate-600 shrink-0">
+                <kbd className="hidden xl:inline-block font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-200/80 text-slate-600 shrink-0">
                   Ctrl K
                 </kbd>
               </button>
@@ -1161,7 +1161,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               <button
                 type="button"
                 onClick={() => openNewOrder()}
-                className="inline-flex items-center gap-1.5 min-h-[44px] px-4 rounded-xl glass-button-primary text-white text-xs font-bold transition-all whitespace-nowrap shrink-0 touch-press"
+                className="inline-flex items-center gap-1.5 min-h-[42px] px-3.5 sm:px-4 rounded-xl glass-button-primary text-white text-xs font-bold transition-all whitespace-nowrap shrink-0 touch-press"
               >
                 <Plus className="w-4 h-4 shrink-0" />
                 Thêm phiếu
@@ -1219,7 +1219,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                       aria-label="Quyền Admin ẩn hiện các mục báo cáo"
                       className="glass-tile rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2.5 no-print"
                     >
-                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs min-w-0">
                         <span className="inline-flex items-center gap-1.5 font-bold text-blue-900 mr-1">
                           <Shield className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                           Admin — Ẩn/Hiện tab báo cáo:
@@ -1231,7 +1231,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                               key={blk}
                               type="button"
                               onClick={() => store.toggleDashboardBlockVisibility(blk)}
-                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all whitespace-nowrap ${
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all text-left max-w-full whitespace-normal sm:whitespace-nowrap ${
                                 hidden
                                   ? 'bg-amber-50/90 border-amber-300 text-amber-900 line-through'
                                   : 'bg-white/75 border-white/90 text-slate-700 hover:bg-white'
@@ -1243,7 +1243,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                               ) : (
                                 <Eye className="w-3 h-3 text-blue-600 shrink-0" />
                               )}
-                              <span>{DASHBOARD_BLOCK_LABELS[blk]}</span>
+                              <span className="break-words">{DASHBOARD_BLOCK_LABELS[blk]}</span>
                             </button>
                           );
                         })}
@@ -1350,7 +1350,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                               </span>
                             </div>
 
-                            <div className="flex items-center gap-1.5 shrink-0">
+                            <div className="flex flex-wrap items-center justify-end gap-1.5 w-full sm:w-auto shrink-0">
                               <button
                                 type="button"
                                 disabled={isFirst}
@@ -1716,7 +1716,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 key={item.id}
                 type="button"
                 onClick={() => navigateToPage(item.id)}
-                className={`relative flex-1 min-h-[54px] py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all touch-press ${
+                className={`relative flex-1 min-w-0 min-h-[54px] py-1.5 px-0.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all touch-press ${
                   active ? 'text-blue-700 bg-blue-600/10 font-bold' : 'text-slate-600 font-medium'
                 }`}
               >
@@ -1728,7 +1728,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     </span>
                   )}
                 </span>
-                <span className="text-[10.5px] leading-tight text-center whitespace-nowrap">
+                <span className="text-[10px] leading-tight text-center truncate max-w-full px-0.5">
                   {item.shortLabel}
                 </span>
               </button>

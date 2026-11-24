@@ -252,8 +252,53 @@ export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
           </p>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+        {/* Mobile Cards (< 640px) */}
+        <div className="sm:hidden divide-y divide-slate-200/60">
+          {poBreakdown.length === 0 ? (
+            <div className="py-8 px-4 text-center text-xs text-slate-500">
+              Chưa có dữ liệu PO trong kỳ chọn.
+            </div>
+          ) : (
+            poBreakdown.map((row) => (
+              <div key={row.poNumber} className="p-3.5 space-y-2 bg-white/30">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div
+                      className={`font-mono text-sm font-extrabold break-all ${
+                        row.isMissing ? 'text-amber-700' : 'text-slate-900'
+                      }`}
+                    >
+                      {row.displayLabel}
+                    </div>
+                    <div className="text-[11px] text-slate-600 mt-0.5 font-mono break-words">
+                      Xe: {row.vehiclePlates.join(', ') || '—'}
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="font-mono text-sm font-extrabold text-slate-950 tabular-nums">
+                      {formatVND(row.totalCost)}
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-mono tabular-nums">
+                      {row.orderCount} phiếu · {row.itemCount} HM
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onFilterByPo(row.poNumber)}
+                  className="w-full inline-flex items-center justify-center gap-1.5 min-h-[40px] px-3 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors touch-press"
+                >
+                  <Filter className="w-3.5 h-3.5" />
+                  Xem báo cáo PO
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Tablet & Desktop Table (>= 640px) */}
+        <div className="hidden sm:block overflow-x-auto">
+          <table className="w-full min-w-[680px] text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200/80 bg-slate-50/75 text-[11px] font-semibold text-slate-500">
                 <th className="sticky-col-left-head py-3 px-4 whitespace-nowrap">Số PO</th>

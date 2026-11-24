@@ -156,11 +156,11 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
   return (
     <section
       aria-label="Bộ lọc toàn cục"
-      className="lg:sticky lg:top-2 z-30 glass-panel-strong rounded-2xl p-3 sm:p-4 no-print"
+      className={`${showAdvanced ? '' : 'xl:sticky xl:top-2'} z-30 glass-panel-strong rounded-2xl p-3 sm:p-4 no-print`}
     >
       {/* Row 1: Period + Quick Search + Actions + Live Sync */}
       <div className="flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-2.5 justify-between">
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
+        <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
           {/* Period Preset Segmented Control with horizontal snap on narrow mobile */}
           <div className="w-full sm:w-auto scroll-snap-x">
             <div className="inline-flex items-center p-1 rounded-xl glass-segment min-w-max">
@@ -208,27 +208,27 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
           )}
 
           {filters.periodPreset === 'custom' && (
-            <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 w-full sm:w-auto">
+            <div className="grid grid-cols-1 sm:flex sm:items-center gap-1.5 w-full sm:w-auto">
               <input
                 type="date"
                 aria-label="Từ ngày"
                 value={filters.customStartDate}
                 onChange={(e) => onChange({ customStartDate: e.target.value })}
-                className="glass-input flex-1 sm:flex-initial min-h-[44px] sm:min-h-[36px] h-11 sm:h-9 px-2.5 rounded-xl text-xs font-mono"
+                className="glass-input w-full sm:w-auto min-h-[44px] sm:min-h-[36px] h-11 sm:h-9 px-2.5 rounded-xl text-xs font-mono"
               />
-              <span className="text-xs text-slate-400">→</span>
+              <span className="hidden sm:inline text-xs text-slate-400">→</span>
               <input
                 type="date"
                 aria-label="Đến ngày"
                 value={filters.customEndDate}
                 onChange={(e) => onChange({ customEndDate: e.target.value })}
-                className="glass-input flex-1 sm:flex-initial min-h-[44px] sm:min-h-[36px] h-11 sm:h-9 px-2.5 rounded-xl text-xs font-mono"
+                className="glass-input w-full sm:w-auto min-h-[44px] sm:min-h-[36px] h-11 sm:h-9 px-2.5 rounded-xl text-xs font-mono"
               />
             </div>
           )}
 
           {/* Quick Search */}
-          <div className="relative w-full sm:w-56 md:w-64">
+          <div className="relative w-full sm:flex-1 sm:min-w-[200px] lg:flex-initial lg:w-60 xl:w-64">
             <Search className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"

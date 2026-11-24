@@ -247,6 +247,9 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
   const serverVersionRef = useRef(0);
   const pendingWritesRef = useRef(0);
   const isMountedRef = useRef(true);
+  const clientInstanceIdRef = useRef(`cli_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+  const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const realtimeSubscribedRef = useRef(false);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -327,6 +330,62 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
     []
   );
 
+  const broadcastStateViaSupabase = useCallback((state: SharedServerFleetState) => {
+    const channel = realtimeChannelRef.current;
+    if (!channel || !realtimeSubscribedRef.current) return;
+    try {
+      const serialized = JSON.stringify(state);
+      // Supabase Realtime broadcast messages stay well under 250KB; send full state when compact
+      // or a lightweight refetch signal for very large datasets
+      const payload =
+        serialized.length <= 180_000
+          ? {
+              senderId: clientInstanceIdRef.current,
+              version: state.version,
+              state,
+            }
+          : {
+              senderId: clientInstanceIdRef.current,
+              version: state.version,
+              refetch: true,
+            };
+      void channel.send({
+        type: 'broadcast',
+        event: 'fleet-state-updated',
+        payload,
+      });
+    } catch {
+      // ignore realtime broadcast failure; Postgres/SSE will still deliver updates
+    }
+  }, []);
+
+  const readDirectFromSupabaseFallback = useCallback(async (force = false) => {
+    try {
+      const { data, error } = await supabase
+        .from('fleet_sync_state')
+        .select('version, payload, updated_at')
+        .eq('id', 'primary')
+        .maybeSingle();
+
+      if (error || !data || !data.payload || typeof data.payload !== 'object') {
+        return;
+      }
+      const incoming = data.payload as SharedServerFleetState;
+      const rowVersion = Number(data.version);
+      if (Number.isFinite(rowVersion) && rowVersion >= 1) {
+        incoming.version = rowVersion;
+      }
+      if (typeof data.updated_at === 'string' && data.updated_at) {
+        incoming.lastUpdated = data.updated_at;
+      }
+      if (isMountedRef.current) {
+        applyServerState(incoming, force);
+      }
+    } catch {
+      // Table may not be provisioned yet; ignore silently
+    }
+  }, [applyServerState]);
+
   const syncFromServer = useCallback(
     async (opts?: { allowBootstrap?: boolean; force?: boolean; showSpinner?: boolean }) => {
       const token = await getAccessToken();
@@ -342,7 +401,10 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
           cache: 'no-store',
         });
 
-        if (!res.ok) return;
+        if (!res.ok) {
+          await readDirectFromSupabaseFallback(Boolean(opts?.force));
+          return;
+        }
         const data = (await res.json()) as {
           initialized?: boolean;
           state?: SharedServerFleetState | null;
@@ -374,6 +436,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
             const bootData = (await bootRes.json()) as { state?: SharedServerFleetState | null };
             if (bootData.state && isMountedRef.current) {
               applyServerState(bootData.state, true);
+              broadcastStateViaSupabase(bootData.state);
             }
           }
           return;
@@ -383,7 +446,8 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
           applyServerState(data.state, Boolean(opts?.force));
         }
       } catch {
-        // Network issue; retain cached view until reconnect
+        // Fallback to direct Supabase read when server is momentarily unreachable
+        await readDirectFromSupabaseFallback(Boolean(opts?.force));
       } finally {
         if (opts?.showSpinner && isMountedRef.current) {
           window.setTimeout(() => {
@@ -392,7 +456,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
         }
       }
     },
-    [applyServerState]
+    [applyServerState, broadcastStateViaSupabase, readDirectFromSupabaseFallback]
   );
 
   const sendMutation = useCallback(
@@ -435,6 +499,8 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
 
         if (payload.state && isMountedRef.current) {
           applyServerState(payload.state, true);
+          // Immediately push the confirmed state to all other devices over Supabase Realtime
+          broadcastStateViaSupabase(payload.state);
         }
       } catch {
         onSyncErrorRef.current?.('Mất kết nối máy chủ — đang đồng bộ lại dữ liệu.');
@@ -443,8 +509,78 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
         pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
       }
     },
-    [applyServerState, syncFromServer]
+    [applyServerState, broadcastStateViaSupabase, syncFromServer]
   );
+
+  // Supabase Realtime channel (postgres_changes + broadcast) for instant cross-device sync
+  useEffect(() => {
+    let active = true;
+    const channel = supabase
+      .channel('fleet-realtime-sync', {
+        config: {
+          broadcast: { self: false, ack: false },
+        },
+      })
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'fleet_sync_state',
+          filter: 'id=eq.primary',
+        },
+        (change) => {
+          if (!active) return;
+          const nextRow = change.new as
+            | { version?: number; payload?: SharedServerFleetState; updated_at?: string }
+            | undefined;
+          if (nextRow?.payload && Array.isArray(nextRow.payload.vehicles)) {
+            const incoming: SharedServerFleetState = {
+              ...nextRow.payload,
+              version:
+                typeof nextRow.version === 'number' && nextRow.version >= 1
+                  ? nextRow.version
+                  : nextRow.payload.version,
+              lastUpdated: nextRow.updated_at || nextRow.payload.lastUpdated,
+            };
+            applyServerState(incoming, false);
+          } else {
+            void syncFromServer({ force: false });
+          }
+        }
+      )
+      .on('broadcast', { event: 'fleet-state-updated' }, ({ payload }) => {
+        if (!active || !payload || typeof payload !== 'object') return;
+        const msg = payload as {
+          senderId?: string;
+          version?: number;
+          state?: SharedServerFleetState;
+          refetch?: boolean;
+        };
+        if (msg.senderId && msg.senderId === clientInstanceIdRef.current) return;
+        if (msg.state && Array.isArray(msg.state.vehicles)) {
+          applyServerState(msg.state, false);
+        } else if (msg.refetch || (typeof msg.version === 'number' && msg.version > serverVersionRef.current)) {
+          void syncFromServer({ force: false });
+        }
+      })
+      .subscribe((status) => {
+        if (!active) return;
+        realtimeSubscribedRef.current = status === 'SUBSCRIBED';
+        if (status === 'SUBSCRIBED') {
+          void syncFromServer({ force: false });
+        }
+      });
+
+    realtimeChannelRef.current = channel;
+
+    return () => {
+      active = false;
+      realtimeSubscribedRef.current = false;
+      realtimeChannelRef.current = null;
+      void supabase.removeChannel(channel);
+    };
+  }, [applyServerState, syncFromServer]);
 
   // Initial hydration + Real-time SSE cross-device stream + focus/visibility/periodic fallback sync
   useEffect(() => {

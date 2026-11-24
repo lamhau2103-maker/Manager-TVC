@@ -544,10 +544,10 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
         </div>
 
         {/* Profile Header Card */}
-        <div className="glass-panel-strong rounded-2xl p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 items-center">
-          <div className="lg:col-span-5 flex flex-col sm:flex-row items-start sm:items-center gap-3.5 sm:gap-4">
+        <div className="glass-panel-strong rounded-2xl p-4 sm:p-5 grid grid-cols-1 xl:grid-cols-12 gap-4 sm:gap-5 items-center">
+          <div className="xl:col-span-5 flex flex-col sm:flex-row items-start sm:items-center gap-3.5 sm:gap-4 min-w-0">
             <VietnamesePlateBadge plate={activeVehicle.plate} size="lg" square />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="text-base sm:text-lg font-extrabold text-slate-900 break-words">
                 {activeVehicle.brand_model}
               </div>
@@ -561,7 +561,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
             </div>
           </div>
 
-          <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="xl:col-span-7 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-2 2xl:grid-cols-4 gap-3 min-w-0">
             <div className="p-3 rounded-xl glass-tile">
               <div className="text-[11px] text-slate-600">Tổng chi phí lũy kế</div>
               <div className="mt-1 font-mono text-base font-extrabold text-blue-700 tabular-nums">

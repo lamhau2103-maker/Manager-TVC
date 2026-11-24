@@ -4,6 +4,7 @@ import path from 'node:path';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -15,6 +16,9 @@ const DEFAULT_SUPABASE_PUBLISHABLE_KEY =
 const SUPABASE_URL = (process.env.VITE_SUPABASE_URL || '').trim() || DEFAULT_SUPABASE_URL;
 const SUPABASE_ANON_KEY =
   (process.env.VITE_SUPABASE_ANON_KEY || '').trim() || DEFAULT_SUPABASE_PUBLISHABLE_KEY;
+
+const SUPABASE_SYNC_TABLE = 'fleet_sync_state';
+const SUPABASE_SYNC_ROW_ID = 'primary';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE_PATH = path.resolve(DATA_DIR, 'fleet-db.json');
@@ -140,6 +144,7 @@ interface AuthedCaller {
   userId: string;
   role: 'admin' | 'user';
   actorName: string;
+  scopedClient: SupabaseClient;
 }
 
 interface AuthedRequest extends Request {
@@ -278,9 +283,11 @@ function sanitizeItem(
   };
 }
 
-// ==================== ATOMIC FILE PERSISTENCE ====================
+// ==================== ATOMIC FILE + SUPABASE PERSISTENCE ====================
 
 let dbState: SharedFleetState | null = null;
+let supabaseTableUnavailableUntil = 0;
+let mutationChain: Promise<unknown> = Promise.resolve();
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -297,77 +304,94 @@ function isLegacyMockVehicle(v: VehicleRecord): boolean {
   return LEGACY_MOCK_VEHICLE_IDS.has(v.id) || LEGACY_MOCK_PLATE_KEYS.has(key);
 }
 
+function normalizeParsedFleetState(
+  parsed: Partial<SharedFleetState>,
+  overrideVersion?: number
+): { state: SharedFleetState; cleaned: boolean } | null {
+  if (
+    !parsed ||
+    !Array.isArray(parsed.vehicles) ||
+    !Array.isArray(parsed.orders) ||
+    !Array.isArray(parsed.items)
+  ) {
+    return null;
+  }
+
+  const rawVehicles = parsed.vehicles as VehicleRecord[];
+  const rawOrders = parsed.orders as OrderRecord[];
+  const rawItems = parsed.items as ItemRecord[];
+  const rawLogs = Array.isArray(parsed.auditLogs)
+    ? (parsed.auditLogs as AuditLogRecord[])
+    : [];
+
+  const removedVehicleIds = new Set(
+    rawVehicles.filter((v) => isLegacyMockVehicle(v)).map((v) => v.id)
+  );
+  const cleanedVehicles = rawVehicles.filter((v) => !isLegacyMockVehicle(v));
+  const cleanedOrders = rawOrders.filter(
+    (o) => !removedVehicleIds.has(o.vehicle_id) && !isLegacyMockOrderId(o.id)
+  );
+  const keptOrderIds = new Set(cleanedOrders.map((o) => o.id));
+  const cleanedItems = rawItems.filter((it) => keptOrderIds.has(it.order_id));
+  const cleanedLogs = rawLogs
+    .filter((l) => !LEGACY_MOCK_LOG_IDS.has(l.id))
+    .slice(0, MAX_AUDIT_LOGS);
+
+  const rawVersion =
+    typeof overrideVersion === 'number' && Number.isFinite(overrideVersion) && overrideVersion >= 1
+      ? Math.floor(overrideVersion)
+      : typeof parsed.version === 'number' && Number.isFinite(parsed.version) && parsed.version >= 1
+        ? Math.floor(parsed.version)
+        : 1;
+
+  const state: SharedFleetState = {
+    version: rawVersion,
+    vehicles: cleanedVehicles,
+    orders: cleanedOrders,
+    items: cleanedItems,
+    auditLogs: cleanedLogs,
+    monthlyBudget:
+      typeof parsed.monthlyBudget === 'number' &&
+      Number.isFinite(parsed.monthlyBudget) &&
+      parsed.monthlyBudget > 0
+        ? Math.round(parsed.monthlyBudget)
+        : DEFAULT_MONTHLY_BUDGET,
+    hiddenReportTabs: Array.isArray(parsed.hiddenReportTabs)
+      ? parsed.hiddenReportTabs.filter(
+          (t): t is string => typeof t === 'string' && VALID_APP_PAGES.has(t) && t !== 'dashboard'
+        )
+      : [],
+    hiddenDashboardBlocks: Array.isArray(parsed.hiddenDashboardBlocks)
+      ? parsed.hiddenDashboardBlocks.filter(
+          (b): b is string => typeof b === 'string' && VALID_DASHBOARD_BLOCKS.has(b)
+        )
+      : [],
+    dashboardBlockOrder: normalizeBlockOrder(parsed.dashboardBlockOrder),
+    lastUpdated:
+      typeof parsed.lastUpdated === 'string' && parsed.lastUpdated
+        ? parsed.lastUpdated
+        : new Date().toISOString(),
+  };
+
+  const cleaned =
+    cleanedVehicles.length !== rawVehicles.length ||
+    cleanedOrders.length !== rawOrders.length ||
+    cleanedItems.length !== rawItems.length ||
+    cleanedLogs.length !== rawLogs.length;
+
+  return { state, cleaned };
+}
+
 function loadStateFromDisk(): SharedFleetState | null {
   try {
     if (!fs.existsSync(DB_FILE_PATH)) return null;
     const raw = fs.readFileSync(DB_FILE_PATH, 'utf8');
     const parsed = JSON.parse(raw) as Partial<SharedFleetState>;
-    if (
-      !Array.isArray(parsed.vehicles) ||
-      !Array.isArray(parsed.orders) ||
-      !Array.isArray(parsed.items)
-    ) {
-      return null;
-    }
+    const normalized = normalizeParsedFleetState(parsed);
+    if (!normalized) return null;
 
-    const rawVehicles = parsed.vehicles as VehicleRecord[];
-    const rawOrders = parsed.orders as OrderRecord[];
-    const rawItems = parsed.items as ItemRecord[];
-    const rawLogs = Array.isArray(parsed.auditLogs)
-      ? (parsed.auditLogs as AuditLogRecord[])
-      : [];
-
-    const removedVehicleIds = new Set(
-      rawVehicles.filter((v) => isLegacyMockVehicle(v)).map((v) => v.id)
-    );
-    const cleanedVehicles = rawVehicles.filter((v) => !isLegacyMockVehicle(v));
-    const cleanedOrders = rawOrders.filter(
-      (o) => !removedVehicleIds.has(o.vehicle_id) && !isLegacyMockOrderId(o.id)
-    );
-    const keptOrderIds = new Set(cleanedOrders.map((o) => o.id));
-    const cleanedItems = rawItems.filter((it) => keptOrderIds.has(it.order_id));
-    const cleanedLogs = rawLogs
-      .filter((l) => !LEGACY_MOCK_LOG_IDS.has(l.id))
-      .slice(0, MAX_AUDIT_LOGS);
-
-    const state: SharedFleetState = {
-      version:
-        typeof parsed.version === 'number' && parsed.version >= 1
-          ? Math.floor(parsed.version)
-          : 1,
-      vehicles: cleanedVehicles,
-      orders: cleanedOrders,
-      items: cleanedItems,
-      auditLogs: cleanedLogs,
-      monthlyBudget:
-        typeof parsed.monthlyBudget === 'number' &&
-        Number.isFinite(parsed.monthlyBudget) &&
-        parsed.monthlyBudget > 0
-          ? Math.round(parsed.monthlyBudget)
-          : DEFAULT_MONTHLY_BUDGET,
-      hiddenReportTabs: Array.isArray(parsed.hiddenReportTabs)
-        ? parsed.hiddenReportTabs.filter(
-            (t): t is string => typeof t === 'string' && VALID_APP_PAGES.has(t) && t !== 'dashboard'
-          )
-        : [],
-      hiddenDashboardBlocks: Array.isArray(parsed.hiddenDashboardBlocks)
-        ? parsed.hiddenDashboardBlocks.filter(
-            (b): b is string => typeof b === 'string' && VALID_DASHBOARD_BLOCKS.has(b)
-          )
-        : [],
-      dashboardBlockOrder: normalizeBlockOrder(parsed.dashboardBlockOrder),
-      lastUpdated:
-        typeof parsed.lastUpdated === 'string' && parsed.lastUpdated
-          ? parsed.lastUpdated
-          : new Date().toISOString(),
-    };
-
-    if (
-      cleanedVehicles.length !== rawVehicles.length ||
-      cleanedOrders.length !== rawOrders.length ||
-      cleanedItems.length !== rawItems.length ||
-      cleanedLogs.length !== rawLogs.length
-    ) {
+    const { state, cleaned } = normalized;
+    if (cleaned) {
       state.version += 1;
       state.lastUpdated = new Date().toISOString();
       persistStateToDisk(state);
@@ -388,6 +412,126 @@ function persistStateToDisk(nextState: SharedFleetState): void {
   );
   fs.writeFileSync(tmpPath, JSON.stringify(nextState, null, 2), 'utf8');
   fs.renameSync(tmpPath, DB_FILE_PATH);
+}
+
+function isMissingSupabaseTableError(err: { code?: string; message?: string } | null | undefined): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').toUpperCase();
+  const msg = String(err.message || '').toLowerCase();
+  return (
+    code === 'PGRST205' ||
+    code === '42P01' ||
+    msg.includes('could not find the table') ||
+    msg.includes('does not exist')
+  );
+}
+
+async function readStateFromSupabase(
+  client: SupabaseClient
+): Promise<{ status: 'ok'; state: SharedFleetState } | { status: 'empty' | 'unavailable' }> {
+  if (Date.now() < supabaseTableUnavailableUntil) {
+    return { status: 'unavailable' };
+  }
+  try {
+    const { data, error } = await client
+      .from(SUPABASE_SYNC_TABLE)
+      .select('version, payload, updated_at')
+      .eq('id', SUPABASE_SYNC_ROW_ID)
+      .maybeSingle();
+
+    if (error) {
+      if (isMissingSupabaseTableError(error)) {
+        // Re-check periodically (every 30s) in case the admin just ran the SQL script
+        supabaseTableUnavailableUntil = Date.now() + 30_000;
+      }
+      return { status: 'unavailable' };
+    }
+
+    supabaseTableUnavailableUntil = 0;
+    if (!data || !data.payload || typeof data.payload !== 'object') {
+      return { status: 'empty' };
+    }
+
+    const rowVersion = Number(data.version);
+    const normalized = normalizeParsedFleetState(
+      data.payload as Partial<SharedFleetState>,
+      Number.isFinite(rowVersion) && rowVersion >= 1 ? rowVersion : undefined
+    );
+    if (!normalized) {
+      return { status: 'empty' };
+    }
+
+    if (typeof data.updated_at === 'string' && data.updated_at) {
+      normalized.state.lastUpdated = data.updated_at;
+    }
+
+    return { status: 'ok', state: normalized.state };
+  } catch {
+    return { status: 'unavailable' };
+  }
+}
+
+async function writeStateToSupabase(
+  client: SupabaseClient,
+  nextState: SharedFleetState,
+  userId: string
+): Promise<boolean> {
+  if (Date.now() < supabaseTableUnavailableUntil) {
+    return false;
+  }
+  try {
+    const { error } = await client.from(SUPABASE_SYNC_TABLE).upsert(
+      {
+        id: SUPABASE_SYNC_ROW_ID,
+        version: nextState.version,
+        payload: nextState,
+        updated_by: userId || null,
+        updated_at: nextState.lastUpdated,
+      },
+      { onConflict: 'id' }
+    );
+
+    if (error) {
+      if (isMissingSupabaseTableError(error)) {
+        supabaseTableUnavailableUntil = Date.now() + 30_000;
+      } else {
+        console.error('[fleet-supabase] Failed to write state to Supabase:', error.message);
+      }
+      return false;
+    }
+
+    supabaseTableUnavailableUntil = 0;
+    return true;
+  } catch (err) {
+    console.error('[fleet-supabase] Unexpected write error:', err);
+    return false;
+  }
+}
+
+async function hydrateLatestState(caller: AuthedCaller): Promise<SharedFleetState | null> {
+  const remote = await readStateFromSupabase(caller.scopedClient);
+  if (remote.status === 'ok') {
+    const remoteState = remote.state;
+    const localState = dbState;
+    const remoteIsNewer =
+      !localState ||
+      remoteState.version > localState.version ||
+      (remoteState.version === localState.version &&
+        remoteState.lastUpdated > localState.lastUpdated);
+
+    if (remoteIsNewer) {
+      dbState = remoteState;
+      persistStateToDisk(remoteState);
+      broadcastState(remoteState);
+    } else if (localState && localState.version > remoteState.version) {
+      // Local disk has newer commits (e.g. written right before table was created) -> push immediately
+      await writeStateToSupabase(caller.scopedClient, localState, caller.userId);
+    }
+  } else if (remote.status === 'empty' && dbState) {
+    // Table exists and is empty -> seed Supabase with current disk state immediately
+    await writeStateToSupabase(caller.scopedClient, dbState, caller.userId);
+  }
+  return dbState;
 }
 
 // ==================== SSE REAL-TIME BROADCAST ====================
@@ -416,22 +560,42 @@ function broadcastState(state: SharedFleetState): void {
   }
 }
 
-function commitMutation(updater: (prev: SharedFleetState) => SharedFleetState): SharedFleetState {
-  if (!dbState) {
-    throw new Error('DATABASE_NOT_INITIALIZED');
-  }
-  const now = new Date().toISOString();
-  const updated = updater(dbState);
-  const nextState: SharedFleetState = {
-    ...updated,
-    version: dbState.version + 1,
-    auditLogs: updated.auditLogs.slice(0, MAX_AUDIT_LOGS),
-    lastUpdated: now,
-  };
-  persistStateToDisk(nextState);
-  dbState = nextState;
-  broadcastState(nextState);
-  return nextState;
+function runSerialized<T>(task: () => Promise<T>): Promise<T> {
+  const run = mutationChain.then(task, task);
+  mutationChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+async function commitMutation(
+  caller: AuthedCaller,
+  updater: (prev: SharedFleetState) => SharedFleetState
+): Promise<{ state: SharedFleetState; supabaseSynced: boolean }> {
+  return runSerialized(async () => {
+    await hydrateLatestState(caller);
+    if (!dbState) {
+      throw new Error('DATABASE_NOT_INITIALIZED');
+    }
+    const now = new Date().toISOString();
+    const updated = updater(dbState);
+    const nextState: SharedFleetState = {
+      ...updated,
+      version: dbState.version + 1,
+      auditLogs: updated.auditLogs.slice(0, MAX_AUDIT_LOGS),
+      lastUpdated: now,
+    };
+    persistStateToDisk(nextState);
+    dbState = nextState;
+    const supabaseSynced = await writeStateToSupabase(
+      caller.scopedClient,
+      nextState,
+      caller.userId
+    );
+    broadcastState(nextState);
+    return { state: nextState, supabaseSynced };
+  });
 }
 
 // ==================== SUPABASE JWT AUTH + RBAC MIDDLEWARE ====================
@@ -491,6 +655,7 @@ async function resolveCallerFromToken(token: string): Promise<AuthedCaller | nul
     userId: user.id,
     role,
     actorName,
+    scopedClient,
   };
 }
 
@@ -625,340 +790,378 @@ app.get('/api/fleet/stream', (req: Request, res: Response) => {
 });
 
 // 3. Read canonical shared fleet state (all authenticated roles)
-app.get('/api/fleet/state', requireAuth, (_req: AuthedRequest, res: Response) => {
-  if (!dbState) {
-    res.json({ initialized: false, state: null });
-    return;
+app.get('/api/fleet/state', requireAuth, async (req: AuthedRequest, res: Response) => {
+  try {
+    await hydrateLatestState(req.caller!);
+    if (!dbState) {
+      res.json({ initialized: false, state: null });
+      return;
+    }
+    res.json({ initialized: true, state: dbState });
+  } catch {
+    res.status(500).json({ error: 'Không thể tải dữ liệu đội xe.' });
   }
-  res.json({ initialized: true, state: dbState });
 });
 
-// 4. First-boot bootstrap (only initializes once when disk DB does not exist yet)
-app.post('/api/fleet/bootstrap', requireAuth, (req: AuthedRequest, res: Response) => {
-  if (dbState) {
-    res.json({ initialized: true, state: dbState });
-    return;
-  }
+// 4. First-boot bootstrap (only initializes once when neither Supabase nor disk DB has state)
+app.post('/api/fleet/bootstrap', requireAuth, async (req: AuthedRequest, res: Response) => {
+  try {
+    const result = await runSerialized(async () => {
+      await hydrateLatestState(req.caller!);
+      if (dbState) {
+        return { initialized: true, state: dbState };
+      }
 
-  const body = (req.body || {}) as Record<string, unknown>;
-  if (!Array.isArray(body.vehicles) || !Array.isArray(body.orders) || !Array.isArray(body.items)) {
-    res.status(400).json({ error: 'Dữ liệu khởi tạo không hợp lệ.' });
-    return;
-  }
+      const body = (req.body || {}) as Record<string, unknown>;
+      if (!Array.isArray(body.vehicles) || !Array.isArray(body.orders) || !Array.isArray(body.items)) {
+        return { error: 'Dữ liệu khởi tạo không hợp lệ.', status: 400 as const };
+      }
 
-  const vehicles: VehicleRecord[] = [];
-  const seenPlateKeys = new Set<string>();
-  for (const rawVeh of body.vehicles) {
-    if (!rawVeh || typeof rawVeh !== 'object') continue;
-    const v = sanitizeVehicle(rawVeh as Record<string, unknown>);
-    if (!v || seenPlateKeys.has(v.plate_key) || isLegacyMockVehicle(v)) continue;
-    seenPlateKeys.add(v.plate_key);
-    vehicles.push(v);
-  }
+      const vehicles: VehicleRecord[] = [];
+      const seenPlateKeys = new Set<string>();
+      for (const rawVeh of body.vehicles) {
+        if (!rawVeh || typeof rawVeh !== 'object') continue;
+        const v = sanitizeVehicle(rawVeh as Record<string, unknown>);
+        if (!v || seenPlateKeys.has(v.plate_key) || isLegacyMockVehicle(v)) continue;
+        seenPlateKeys.add(v.plate_key);
+        vehicles.push(v);
+      }
 
-  const keptVehicleIds = new Set(vehicles.map((v) => v.id));
-  const orders: OrderRecord[] = [];
-  const seenOrderIds = new Set<string>();
-  for (const rawOrd of body.orders) {
-    if (!rawOrd || typeof rawOrd !== 'object') continue;
-    const o = rawOrd as Record<string, unknown>;
-    const id = sanitizeClientId(o.id, 'ord') || generateId('ord');
-    const vehicleId = safeString(o.vehicle_id, 64);
-    const serviceDate = safeString(o.service_date, 20);
-    if (
-      !vehicleId ||
-      !serviceDate ||
-      seenOrderIds.has(id) ||
-      isLegacyMockOrderId(id) ||
-      !keptVehicleIds.has(vehicleId)
-    ) {
-      continue;
-    }
-    seenOrderIds.add(id);
-    orders.push({
-      id,
-      vehicle_id: vehicleId,
-      service_date: serviceDate,
-      odometer_km: safeNonNegativeNumber(o.odometer_km, 0),
-      service_interval_km:
-        typeof o.service_interval_km === 'number' && o.service_interval_km >= 1000
-          ? Math.round(o.service_interval_km)
-          : undefined,
-      garage: safeString(o.garage, 120, 'Chưa xác định') || 'Chưa xác định',
-      driver_name: safeString(o.driver_name, 100, ''),
-      service_type: safeString(o.service_type, 60, 'Định kỳ') || 'Định kỳ',
-      note: safeString(o.note, 500, ''),
-      created_at: safeString(o.created_at, 40) || new Date().toISOString(),
-      updated_at: safeString(o.updated_at, 40) || new Date().toISOString(),
+      const keptVehicleIds = new Set(vehicles.map((v) => v.id));
+      const orders: OrderRecord[] = [];
+      const seenOrderIds = new Set<string>();
+      for (const rawOrd of body.orders) {
+        if (!rawOrd || typeof rawOrd !== 'object') continue;
+        const o = rawOrd as Record<string, unknown>;
+        const id = sanitizeClientId(o.id, 'ord') || generateId('ord');
+        const vehicleId = safeString(o.vehicle_id, 64);
+        const serviceDate = safeString(o.service_date, 20);
+        if (
+          !vehicleId ||
+          !serviceDate ||
+          seenOrderIds.has(id) ||
+          isLegacyMockOrderId(id) ||
+          !keptVehicleIds.has(vehicleId)
+        ) {
+          continue;
+        }
+        seenOrderIds.add(id);
+        orders.push({
+          id,
+          vehicle_id: vehicleId,
+          service_date: serviceDate,
+          odometer_km: safeNonNegativeNumber(o.odometer_km, 0),
+          service_interval_km:
+            typeof o.service_interval_km === 'number' && o.service_interval_km >= 1000
+              ? Math.round(o.service_interval_km)
+              : undefined,
+          garage: safeString(o.garage, 120, 'Chưa xác định') || 'Chưa xác định',
+          driver_name: safeString(o.driver_name, 100, ''),
+          service_type: safeString(o.service_type, 60, 'Định kỳ') || 'Định kỳ',
+          note: safeString(o.note, 500, ''),
+          created_at: safeString(o.created_at, 40) || new Date().toISOString(),
+          updated_at: safeString(o.updated_at, 40) || new Date().toISOString(),
+        });
+      }
+
+      const items: ItemRecord[] = [];
+      for (const rawIt of body.items) {
+        if (!rawIt || typeof rawIt !== 'object') continue;
+        const it = rawIt as Record<string, unknown>;
+        const orderId = safeString(it.order_id, 64);
+        if (!orderId || !seenOrderIds.has(orderId)) continue;
+        const clean = sanitizeItem(it, orderId, true);
+        if (clean) items.push(clean);
+      }
+
+      const auditLogs: AuditLogRecord[] = Array.isArray(body.auditLogs)
+        ? body.auditLogs
+            .filter((l): l is Record<string, unknown> => Boolean(l && typeof l === 'object'))
+            .filter((l) => !LEGACY_MOCK_LOG_IDS.has(String(l.id || '')))
+            .slice(0, MAX_AUDIT_LOGS)
+            .map((l) => ({
+              id: sanitizeClientId(l.id, 'log') || generateId('log'),
+              timestamp: safeString(l.timestamp, 40) || new Date().toISOString(),
+              actor: safeString(l.actor, 100, 'Hệ thống'),
+              action: safeString(l.action, 20, 'UPDATE'),
+              entity: safeString(l.entity, 20, 'system'),
+              summary: safeString(l.summary, 300, ''),
+              details: typeof l.details === 'string' ? l.details.slice(0, 400) : undefined,
+            }))
+        : [];
+
+      const initial: SharedFleetState = {
+        version: 1,
+        vehicles,
+        orders,
+        items,
+        auditLogs,
+        monthlyBudget: Math.max(
+          1_000_000,
+          safeNonNegativeNumber(body.monthlyBudget, DEFAULT_MONTHLY_BUDGET)
+        ),
+        hiddenReportTabs: Array.isArray(body.hiddenReportTabs)
+          ? body.hiddenReportTabs.filter(
+              (t): t is string => typeof t === 'string' && VALID_APP_PAGES.has(t) && t !== 'dashboard'
+            )
+          : [],
+        hiddenDashboardBlocks: Array.isArray(body.hiddenDashboardBlocks)
+          ? body.hiddenDashboardBlocks.filter(
+              (b): b is string => typeof b === 'string' && VALID_DASHBOARD_BLOCKS.has(b)
+            )
+          : [],
+        dashboardBlockOrder: normalizeBlockOrder(body.dashboardBlockOrder),
+        lastUpdated: new Date().toISOString(),
+      };
+
+      persistStateToDisk(initial);
+      dbState = initial;
+      await writeStateToSupabase(req.caller!.scopedClient, initial, req.caller!.userId);
+      broadcastState(initial);
+      return { initialized: true, state: initial };
     });
+
+    if ('error' in result && result.error) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.json(result);
+  } catch {
+    res.status(500).json({ error: 'Không thể khởi tạo dữ liệu đội xe.' });
   }
-
-  const items: ItemRecord[] = [];
-  for (const rawIt of body.items) {
-    if (!rawIt || typeof rawIt !== 'object') continue;
-    const it = rawIt as Record<string, unknown>;
-    const orderId = safeString(it.order_id, 64);
-    if (!orderId || !seenOrderIds.has(orderId)) continue;
-    const clean = sanitizeItem(it, orderId, true);
-    if (clean) items.push(clean);
-  }
-
-  const auditLogs: AuditLogRecord[] = Array.isArray(body.auditLogs)
-    ? body.auditLogs
-        .filter((l): l is Record<string, unknown> => Boolean(l && typeof l === 'object'))
-        .filter((l) => !LEGACY_MOCK_LOG_IDS.has(String(l.id || '')))
-        .slice(0, MAX_AUDIT_LOGS)
-        .map((l) => ({
-          id: sanitizeClientId(l.id, 'log') || generateId('log'),
-          timestamp: safeString(l.timestamp, 40) || new Date().toISOString(),
-          actor: safeString(l.actor, 100, 'Hệ thống'),
-          action: safeString(l.action, 20, 'UPDATE'),
-          entity: safeString(l.entity, 20, 'system'),
-          summary: safeString(l.summary, 300, ''),
-          details: typeof l.details === 'string' ? l.details.slice(0, 400) : undefined,
-        }))
-    : [];
-
-  const initial: SharedFleetState = {
-    version: 1,
-    vehicles,
-    orders,
-    items,
-    auditLogs,
-    monthlyBudget: Math.max(
-      1_000_000,
-      safeNonNegativeNumber(body.monthlyBudget, DEFAULT_MONTHLY_BUDGET)
-    ),
-    hiddenReportTabs: Array.isArray(body.hiddenReportTabs)
-      ? body.hiddenReportTabs.filter(
-          (t): t is string => typeof t === 'string' && VALID_APP_PAGES.has(t) && t !== 'dashboard'
-        )
-      : [],
-    hiddenDashboardBlocks: Array.isArray(body.hiddenDashboardBlocks)
-      ? body.hiddenDashboardBlocks.filter(
-          (b): b is string => typeof b === 'string' && VALID_DASHBOARD_BLOCKS.has(b)
-        )
-      : [],
-    dashboardBlockOrder: normalizeBlockOrder(body.dashboardBlockOrder),
-    lastUpdated: new Date().toISOString(),
-  };
-
-  persistStateToDisk(initial);
-  dbState = initial;
-  broadcastState(initial);
-  res.json({ initialized: true, state: initial });
 });
 
 // 5. CREATE NEW MAINTENANCE ORDER (Allowed for BOTH admin and user — NEVER overwrites existing order)
-app.post('/api/fleet/orders', requireAuth, (req: AuthedRequest, res: Response) => {
-  if (!dbState) {
-    res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-    return;
+app.post('/api/fleet/orders', requireAuth, async (req: AuthedRequest, res: Response) => {
+  try {
+    await hydrateLatestState(req.caller!);
+    if (!dbState) {
+      res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+      return;
+    }
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const orderInput = (body.order || {}) as Record<string, unknown>;
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+
+    const vehicleId = safeString(orderInput.vehicle_id, 64);
+    const serviceDate = safeString(orderInput.service_date, 20);
+    if (!vehicleId || !serviceDate) {
+      res.status(400).json({ error: 'Thiếu biển số xe hoặc ngày bảo dưỡng.' });
+      return;
+    }
+
+    const vehicle = dbState.vehicles.find((v) => v.id === vehicleId);
+    if (!vehicle) {
+      res.status(404).json({ error: 'Không tìm thấy phương tiện đã chọn.' });
+      return;
+    }
+
+    // Always create a brand-new order; never allow POST to overwrite an existing order ID
+    const requestedId = sanitizeClientId(orderInput.id, 'ord');
+    const orderId =
+      requestedId && !dbState.orders.some((o) => o.id === requestedId)
+        ? requestedId
+        : generateId('ord');
+
+    const nextItems: ItemRecord[] = [];
+    for (const rawIt of rawItems) {
+      if (!rawIt || typeof rawIt !== 'object') continue;
+      const clean = sanitizeItem(rawIt as Record<string, unknown>, orderId, false);
+      if (clean) nextItems.push(clean);
+    }
+    if (nextItems.length === 0) {
+      res.status(400).json({ error: 'Phiếu bảo dưỡng cần có ít nhất 1 hạng mục.' });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const nextOrder: OrderRecord = {
+      id: orderId,
+      vehicle_id: vehicleId,
+      service_date: serviceDate,
+      odometer_km: safeNonNegativeNumber(orderInput.odometer_km, 0),
+      service_interval_km:
+        typeof orderInput.service_interval_km === 'number' && orderInput.service_interval_km >= 1000
+          ? Math.round(orderInput.service_interval_km)
+          : undefined,
+      garage: safeString(orderInput.garage, 120, 'Chưa xác định') || 'Chưa xác định',
+      driver_name: safeString(orderInput.driver_name, 100, ''),
+      service_type: safeString(orderInput.service_type, 60, 'Định kỳ') || 'Định kỳ',
+      note: safeString(orderInput.note, 500, ''),
+      created_at: now,
+      updated_at: now,
+    };
+
+    const totalAmount = nextItems.reduce((s, it) => s + it.amount, 0);
+    const poList = Array.from(new Set(nextItems.map((i) => i.po_number).filter(Boolean))).join(', ');
+    const actor = req.caller!.actorName;
+
+    const log: AuditLogRecord = {
+      id: generateId('log'),
+      timestamp: now,
+      actor,
+      action: 'CREATE',
+      entity: 'order',
+      summary: `Thêm mới phiếu bảo dưỡng xe ${vehicle.plate} ngày ${nextOrder.service_date}`,
+      details: `${nextItems.length} hạng mục · ${formatVND(totalAmount)}${poList ? ` · ${poList}` : ' · Chưa có PO'}`,
+    };
+
+    const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+      ...prev,
+      vehicles: syncVehicleOnOrder(prev.vehicles, nextOrder),
+      orders: [nextOrder, ...prev.orders],
+      items: [...nextItems, ...prev.items],
+      auditLogs: [log, ...prev.auditLogs],
+    }));
+
+    res.status(201).json({ ok: true, orderId, state, supabaseSynced });
+  } catch {
+    res.status(500).json({ error: 'Không thể lưu phiếu bảo dưỡng.' });
   }
-
-  const body = (req.body || {}) as Record<string, unknown>;
-  const orderInput = (body.order || {}) as Record<string, unknown>;
-  const rawItems = Array.isArray(body.items) ? body.items : [];
-
-  const vehicleId = safeString(orderInput.vehicle_id, 64);
-  const serviceDate = safeString(orderInput.service_date, 20);
-  if (!vehicleId || !serviceDate) {
-    res.status(400).json({ error: 'Thiếu biển số xe hoặc ngày bảo dưỡng.' });
-    return;
-  }
-
-  const vehicle = dbState.vehicles.find((v) => v.id === vehicleId);
-  if (!vehicle) {
-    res.status(404).json({ error: 'Không tìm thấy phương tiện đã chọn.' });
-    return;
-  }
-
-  // Always create a brand-new order; never allow POST to overwrite an existing order ID
-  const requestedId = sanitizeClientId(orderInput.id, 'ord');
-  const orderId =
-    requestedId && !dbState.orders.some((o) => o.id === requestedId)
-      ? requestedId
-      : generateId('ord');
-
-  const nextItems: ItemRecord[] = [];
-  for (const rawIt of rawItems) {
-    if (!rawIt || typeof rawIt !== 'object') continue;
-    const clean = sanitizeItem(rawIt as Record<string, unknown>, orderId, false);
-    if (clean) nextItems.push(clean);
-  }
-  if (nextItems.length === 0) {
-    res.status(400).json({ error: 'Phiếu bảo dưỡng cần có ít nhất 1 hạng mục.' });
-    return;
-  }
-
-  const now = new Date().toISOString();
-  const nextOrder: OrderRecord = {
-    id: orderId,
-    vehicle_id: vehicleId,
-    service_date: serviceDate,
-    odometer_km: safeNonNegativeNumber(orderInput.odometer_km, 0),
-    service_interval_km:
-      typeof orderInput.service_interval_km === 'number' && orderInput.service_interval_km >= 1000
-        ? Math.round(orderInput.service_interval_km)
-        : undefined,
-    garage: safeString(orderInput.garage, 120, 'Chưa xác định') || 'Chưa xác định',
-    driver_name: safeString(orderInput.driver_name, 100, ''),
-    service_type: safeString(orderInput.service_type, 60, 'Định kỳ') || 'Định kỳ',
-    note: safeString(orderInput.note, 500, ''),
-    created_at: now,
-    updated_at: now,
-  };
-
-  const totalAmount = nextItems.reduce((s, it) => s + it.amount, 0);
-  const poList = Array.from(new Set(nextItems.map((i) => i.po_number).filter(Boolean))).join(', ');
-  const actor = req.caller!.actorName;
-
-  const log: AuditLogRecord = {
-    id: generateId('log'),
-    timestamp: now,
-    actor,
-    action: 'CREATE',
-    entity: 'order',
-    summary: `Thêm mới phiếu bảo dưỡng xe ${vehicle.plate} ngày ${nextOrder.service_date}`,
-    details: `${nextItems.length} hạng mục · ${formatVND(totalAmount)}${poList ? ` · ${poList}` : ' · Chưa có PO'}`,
-  };
-
-  const state = commitMutation((prev) => ({
-    ...prev,
-    vehicles: syncVehicleOnOrder(prev.vehicles, nextOrder),
-    orders: [nextOrder, ...prev.orders],
-    items: [...nextItems, ...prev.items],
-    auditLogs: [log, ...prev.auditLogs],
-  }));
-
-  res.status(201).json({ ok: true, orderId, state });
 });
 
 // 6. UPDATE EXISTING MAINTENANCE ORDER (Admin ONLY)
-app.put('/api/fleet/orders/:id', requireAuth, requireAdmin, (req: AuthedRequest, res: Response) => {
-  if (!dbState) {
-    res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-    return;
+app.put(
+  '/api/fleet/orders/:id',
+  requireAuth,
+  requireAdmin,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
+
+      const orderId = safeString(req.params.id, 64);
+      const existing = dbState.orders.find((o) => o.id === orderId);
+      if (!existing) {
+        res.status(404).json({ error: 'Không tìm thấy phiếu bảo dưỡng cần cập nhật.' });
+        return;
+      }
+
+      const body = (req.body || {}) as Record<string, unknown>;
+      const orderInput = (body.order || {}) as Record<string, unknown>;
+      const rawItems = Array.isArray(body.items) ? body.items : [];
+
+      const vehicleId = safeString(orderInput.vehicle_id, 64) || existing.vehicle_id;
+      const serviceDate = safeString(orderInput.service_date, 20) || existing.service_date;
+      const vehicle = dbState.vehicles.find((v) => v.id === vehicleId);
+
+      const nextItems: ItemRecord[] = [];
+      for (const rawIt of rawItems) {
+        if (!rawIt || typeof rawIt !== 'object') continue;
+        const clean = sanitizeItem(rawIt as Record<string, unknown>, orderId, true);
+        if (clean) nextItems.push(clean);
+      }
+      if (nextItems.length === 0) {
+        res.status(400).json({ error: 'Phiếu bảo dưỡng cần có ít nhất 1 hạng mục.' });
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const nextOrder: OrderRecord = {
+        id: orderId,
+        vehicle_id: vehicleId,
+        service_date: serviceDate,
+        odometer_km: safeNonNegativeNumber(orderInput.odometer_km, existing.odometer_km),
+        service_interval_km:
+          typeof orderInput.service_interval_km === 'number' &&
+          orderInput.service_interval_km >= 1000
+            ? Math.round(orderInput.service_interval_km)
+            : existing.service_interval_km,
+        garage: safeString(orderInput.garage, 120, existing.garage) || 'Chưa xác định',
+        driver_name: safeString(orderInput.driver_name, 100, existing.driver_name),
+        service_type: safeString(orderInput.service_type, 60, existing.service_type) || 'Định kỳ',
+        note: safeString(orderInput.note, 500, ''),
+        created_at: existing.created_at,
+        updated_at: now,
+      };
+
+      const totalAmount = nextItems.reduce((s, it) => s + it.amount, 0);
+      const poList = Array.from(new Set(nextItems.map((i) => i.po_number).filter(Boolean))).join(', ');
+
+      const log: AuditLogRecord = {
+        id: generateId('log'),
+        timestamp: now,
+        actor: req.caller!.actorName,
+        action: 'UPDATE',
+        entity: 'order',
+        summary: `Cập nhật phiếu bảo dưỡng xe ${vehicle?.plate ?? ''} ngày ${nextOrder.service_date}`,
+        details: `${nextItems.length} hạng mục · ${formatVND(totalAmount)}${poList ? ` · ${poList}` : ' · Chưa có PO'}`,
+      };
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        vehicles: syncVehicleOnOrder(prev.vehicles, nextOrder),
+        orders: prev.orders.map((o) => (o.id === orderId ? nextOrder : o)),
+        items: [...nextItems, ...prev.items.filter((it) => it.order_id !== orderId)],
+        auditLogs: [log, ...prev.auditLogs],
+      }));
+
+      res.json({ ok: true, orderId, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ error: 'Không thể cập nhật phiếu bảo dưỡng.' });
+    }
   }
-
-  const orderId = safeString(req.params.id, 64);
-  const existing = dbState.orders.find((o) => o.id === orderId);
-  if (!existing) {
-    res.status(404).json({ error: 'Không tìm thấy phiếu bảo dưỡng cần cập nhật.' });
-    return;
-  }
-
-  const body = (req.body || {}) as Record<string, unknown>;
-  const orderInput = (body.order || {}) as Record<string, unknown>;
-  const rawItems = Array.isArray(body.items) ? body.items : [];
-
-  const vehicleId = safeString(orderInput.vehicle_id, 64) || existing.vehicle_id;
-  const serviceDate = safeString(orderInput.service_date, 20) || existing.service_date;
-  const vehicle = dbState.vehicles.find((v) => v.id === vehicleId);
-
-  const nextItems: ItemRecord[] = [];
-  for (const rawIt of rawItems) {
-    if (!rawIt || typeof rawIt !== 'object') continue;
-    const clean = sanitizeItem(rawIt as Record<string, unknown>, orderId, true);
-    if (clean) nextItems.push(clean);
-  }
-  if (nextItems.length === 0) {
-    res.status(400).json({ error: 'Phiếu bảo dưỡng cần có ít nhất 1 hạng mục.' });
-    return;
-  }
-
-  const now = new Date().toISOString();
-  const nextOrder: OrderRecord = {
-    id: orderId,
-    vehicle_id: vehicleId,
-    service_date: serviceDate,
-    odometer_km: safeNonNegativeNumber(orderInput.odometer_km, existing.odometer_km),
-    service_interval_km:
-      typeof orderInput.service_interval_km === 'number' && orderInput.service_interval_km >= 1000
-        ? Math.round(orderInput.service_interval_km)
-        : existing.service_interval_km,
-    garage: safeString(orderInput.garage, 120, existing.garage) || 'Chưa xác định',
-    driver_name: safeString(orderInput.driver_name, 100, existing.driver_name),
-    service_type: safeString(orderInput.service_type, 60, existing.service_type) || 'Định kỳ',
-    note: safeString(orderInput.note, 500, ''),
-    created_at: existing.created_at,
-    updated_at: now,
-  };
-
-  const totalAmount = nextItems.reduce((s, it) => s + it.amount, 0);
-  const poList = Array.from(new Set(nextItems.map((i) => i.po_number).filter(Boolean))).join(', ');
-
-  const log: AuditLogRecord = {
-    id: generateId('log'),
-    timestamp: now,
-    actor: req.caller!.actorName,
-    action: 'UPDATE',
-    entity: 'order',
-    summary: `Cập nhật phiếu bảo dưỡng xe ${vehicle?.plate ?? ''} ngày ${nextOrder.service_date}`,
-    details: `${nextItems.length} hạng mục · ${formatVND(totalAmount)}${poList ? ` · ${poList}` : ' · Chưa có PO'}`,
-  };
-
-  const state = commitMutation((prev) => ({
-    ...prev,
-    vehicles: syncVehicleOnOrder(prev.vehicles, nextOrder),
-    orders: prev.orders.map((o) => (o.id === orderId ? nextOrder : o)),
-    items: [...nextItems, ...prev.items.filter((it) => it.order_id !== orderId)],
-    auditLogs: [log, ...prev.auditLogs],
-  }));
-
-  res.json({ ok: true, orderId, state });
-});
+);
 
 // 7. APPEND ITEMS TO EXISTING ORDER (Admin ONLY)
 app.post(
   '/api/fleet/orders/:id/items',
   requireAuth,
   requireAdmin,
-  (req: AuthedRequest, res: Response) => {
-    if (!dbState) {
-      res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-      return;
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
+
+      const orderId = safeString(req.params.id, 64);
+      const targetOrder = dbState.orders.find((o) => o.id === orderId);
+      if (!targetOrder) {
+        res.status(404).json({ error: 'Không tìm thấy phiếu bảo dưỡng.' });
+        return;
+      }
+
+      const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+      const created: ItemRecord[] = [];
+      for (const rawIt of rawItems) {
+        if (!rawIt || typeof rawIt !== 'object') continue;
+        const clean = sanitizeItem(rawIt as Record<string, unknown>, orderId, false);
+        if (clean) created.push(clean);
+      }
+      if (created.length === 0) {
+        res.status(400).json({ error: 'Không có hạng mục hợp lệ để gộp.' });
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const veh = dbState.vehicles.find((v) => v.id === targetOrder.vehicle_id);
+      const log: AuditLogRecord = {
+        id: generateId('log'),
+        timestamp: now,
+        actor: req.caller!.actorName,
+        action: 'UPDATE',
+        entity: 'order',
+        summary: `Gộp thêm ${created.length} hạng mục vào phiếu xe ${veh?.plate ?? ''} (${targetOrder.service_date})`,
+        details: `Giá trị thêm: ${formatVND(created.reduce((s, x) => s + x.amount, 0))}`,
+      };
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        orders: prev.orders.map((o) => (o.id === orderId ? { ...o, updated_at: now } : o)),
+        items: [...created, ...prev.items],
+        auditLogs: [log, ...prev.auditLogs],
+      }));
+
+      res.json({ ok: true, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ error: 'Không thể gộp thêm hạng mục.' });
     }
-
-    const orderId = safeString(req.params.id, 64);
-    const targetOrder = dbState.orders.find((o) => o.id === orderId);
-    if (!targetOrder) {
-      res.status(404).json({ error: 'Không tìm thấy phiếu bảo dưỡng.' });
-      return;
-    }
-
-    const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
-    const created: ItemRecord[] = [];
-    for (const rawIt of rawItems) {
-      if (!rawIt || typeof rawIt !== 'object') continue;
-      const clean = sanitizeItem(rawIt as Record<string, unknown>, orderId, false);
-      if (clean) created.push(clean);
-    }
-    if (created.length === 0) {
-      res.status(400).json({ error: 'Không có hạng mục hợp lệ để gộp.' });
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const veh = dbState.vehicles.find((v) => v.id === targetOrder.vehicle_id);
-    const log: AuditLogRecord = {
-      id: generateId('log'),
-      timestamp: now,
-      actor: req.caller!.actorName,
-      action: 'UPDATE',
-      entity: 'order',
-      summary: `Gộp thêm ${created.length} hạng mục vào phiếu xe ${veh?.plate ?? ''} (${targetOrder.service_date})`,
-      details: `Giá trị thêm: ${formatVND(created.reduce((s, x) => s + x.amount, 0))}`,
-    };
-
-    const state = commitMutation((prev) => ({
-      ...prev,
-      orders: prev.orders.map((o) => (o.id === orderId ? { ...o, updated_at: now } : o)),
-      items: [...created, ...prev.items],
-      auditLogs: [log, ...prev.auditLogs],
-    }));
-
-    res.json({ ok: true, state });
   }
 );
 
@@ -967,151 +1170,171 @@ app.delete(
   '/api/fleet/orders/:id',
   requireAuth,
   requireAdmin,
-  (req: AuthedRequest, res: Response) => {
-    if (!dbState) {
-      res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-      return;
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
+
+      const orderId = safeString(req.params.id, 64);
+      const target = dbState.orders.find((o) => o.id === orderId);
+      if (!target) {
+        res.status(404).json({ error: 'Không tìm thấy phiếu bảo dưỡng.' });
+        return;
+      }
+
+      const veh = dbState.vehicles.find((v) => v.id === target.vehicle_id);
+      const removedItems = dbState.items.filter((i) => i.order_id === orderId);
+      const total = removedItems.reduce((s, i) => s + i.amount, 0);
+
+      const log: AuditLogRecord = {
+        id: generateId('log'),
+        timestamp: new Date().toISOString(),
+        actor: req.caller!.actorName,
+        action: 'DELETE',
+        entity: 'order',
+        summary: `Xóa phiếu bảo dưỡng xe ${veh?.plate ?? ''} ngày ${target.service_date}`,
+        details: `${removedItems.length} hạng mục · ${formatVND(total)}`,
+      };
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        orders: prev.orders.filter((o) => o.id !== orderId),
+        items: prev.items.filter((i) => i.order_id !== orderId),
+        auditLogs: [log, ...prev.auditLogs],
+      }));
+
+      res.json({ ok: true, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ error: 'Không thể xóa phiếu bảo dưỡng.' });
     }
-
-    const orderId = safeString(req.params.id, 64);
-    const target = dbState.orders.find((o) => o.id === orderId);
-    if (!target) {
-      res.status(404).json({ error: 'Không tìm thấy phiếu bảo dưỡng.' });
-      return;
-    }
-
-    const veh = dbState.vehicles.find((v) => v.id === target.vehicle_id);
-    const removedItems = dbState.items.filter((i) => i.order_id === orderId);
-    const total = removedItems.reduce((s, i) => s + i.amount, 0);
-
-    const log: AuditLogRecord = {
-      id: generateId('log'),
-      timestamp: new Date().toISOString(),
-      actor: req.caller!.actorName,
-      action: 'DELETE',
-      entity: 'order',
-      summary: `Xóa phiếu bảo dưỡng xe ${veh?.plate ?? ''} ngày ${target.service_date}`,
-      details: `${removedItems.length} hạng mục · ${formatVND(total)}`,
-    };
-
-    const state = commitMutation((prev) => ({
-      ...prev,
-      orders: prev.orders.filter((o) => o.id !== orderId),
-      items: prev.items.filter((i) => i.order_id !== orderId),
-      auditLogs: [log, ...prev.auditLogs],
-    }));
-
-    res.json({ ok: true, state });
   }
 );
 
 // 9. ADD SINGLE VEHICLE (Admin ONLY)
-app.post('/api/fleet/vehicles', requireAuth, requireAdmin, (req: AuthedRequest, res: Response) => {
-  if (!dbState) {
-    res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-    return;
+app.post(
+  '/api/fleet/vehicles',
+  requireAuth,
+  requireAdmin,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
+
+      const rawVeh = (req.body?.vehicle || req.body || {}) as Record<string, unknown>;
+      const newVehicle = sanitizeVehicle(rawVeh);
+      if (!newVehicle) {
+        res.status(400).json({ ok: false, error: 'Biển số không được để trống.' });
+        return;
+      }
+
+      const dup = dbState.vehicles.find((v) => v.plate_key === newVehicle.plate_key);
+      if (dup) {
+        res
+          .status(409)
+          .json({ ok: false, error: `Biển số ${dup.plate} đã tồn tại trong hệ thống.` });
+        return;
+      }
+
+      if (dbState.vehicles.some((v) => v.id === newVehicle.id)) {
+        newVehicle.id = generateId('veh');
+      }
+
+      const log: AuditLogRecord = {
+        id: generateId('log'),
+        timestamp: new Date().toISOString(),
+        actor: req.caller!.actorName,
+        action: 'CREATE',
+        entity: 'vehicle',
+        summary: `Thêm xe mới ${newVehicle.plate} (${newVehicle.type})`,
+        details: `${newVehicle.brand_model || 'Chưa rõ model'} · Tài xế: ${newVehicle.driver_name || '—'} · ${newVehicle.department}`,
+      };
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        vehicles: [newVehicle, ...prev.vehicles],
+        auditLogs: [log, ...prev.auditLogs],
+      }));
+
+      res.status(201).json({ ok: true, vehicle: newVehicle, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Không thể thêm xe mới.' });
+    }
   }
-
-  const rawVeh = (req.body?.vehicle || req.body || {}) as Record<string, unknown>;
-  const newVehicle = sanitizeVehicle(rawVeh);
-  if (!newVehicle) {
-    res.status(400).json({ ok: false, error: 'Biển số không được để trống.' });
-    return;
-  }
-
-  const dup = dbState.vehicles.find((v) => v.plate_key === newVehicle.plate_key);
-  if (dup) {
-    res
-      .status(409)
-      .json({ ok: false, error: `Biển số ${dup.plate} đã tồn tại trong hệ thống.` });
-    return;
-  }
-
-  if (dbState.vehicles.some((v) => v.id === newVehicle.id)) {
-    newVehicle.id = generateId('veh');
-  }
-
-  const log: AuditLogRecord = {
-    id: generateId('log'),
-    timestamp: new Date().toISOString(),
-    actor: req.caller!.actorName,
-    action: 'CREATE',
-    entity: 'vehicle',
-    summary: `Thêm xe mới ${newVehicle.plate} (${newVehicle.type})`,
-    details: `${newVehicle.brand_model || 'Chưa rõ model'} · Tài xế: ${newVehicle.driver_name || '—'} · ${newVehicle.department}`,
-  };
-
-  const state = commitMutation((prev) => ({
-    ...prev,
-    vehicles: [newVehicle, ...prev.vehicles],
-    auditLogs: [log, ...prev.auditLogs],
-  }));
-
-  res.status(201).json({ ok: true, vehicle: newVehicle, state });
-});
+);
 
 // 10. BULK ADD VEHICLES (Admin ONLY)
 app.post(
   '/api/fleet/vehicles/bulk',
   requireAuth,
   requireAdmin,
-  (req: AuthedRequest, res: Response) => {
-    if (!dbState) {
-      res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-      return;
-    }
-
-    const rawVehicles = Array.isArray(req.body?.vehicles) ? req.body.vehicles : [];
-    const existingKeys = new Set(dbState.vehicles.map((v) => v.plate_key));
-    const existingIds = new Set(dbState.vehicles.map((v) => v.id));
-    const added: VehicleRecord[] = [];
-    const skipped: string[] = [];
-
-    for (const item of rawVehicles) {
-      if (!item || typeof item !== 'object') continue;
-      const clean = sanitizeVehicle(item as Record<string, unknown>);
-      if (!clean || clean.plate_key.length < 4) {
-        skipped.push(String((item as Record<string, unknown>).plate || ''));
-        continue;
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
       }
-      if (existingKeys.has(clean.plate_key)) {
-        skipped.push(clean.plate);
-        continue;
+
+      const rawVehicles = Array.isArray(req.body?.vehicles) ? req.body.vehicles : [];
+      const existingKeys = new Set(dbState.vehicles.map((v) => v.plate_key));
+      const existingIds = new Set(dbState.vehicles.map((v) => v.id));
+      const added: VehicleRecord[] = [];
+      const skipped: string[] = [];
+
+      for (const item of rawVehicles) {
+        if (!item || typeof item !== 'object') continue;
+        const clean = sanitizeVehicle(item as Record<string, unknown>);
+        if (!clean || clean.plate_key.length < 4) {
+          skipped.push(String((item as Record<string, unknown>).plate || ''));
+          continue;
+        }
+        if (existingKeys.has(clean.plate_key)) {
+          skipped.push(clean.plate);
+          continue;
+        }
+        if (existingIds.has(clean.id)) {
+          clean.id = generateId('veh');
+        }
+        existingKeys.add(clean.plate_key);
+        existingIds.add(clean.id);
+        added.push(clean);
       }
-      if (existingIds.has(clean.id)) {
-        clean.id = generateId('veh');
+
+      if (added.length === 0) {
+        res.json({ ok: true, added: [], skipped, state: dbState });
+        return;
       }
-      existingKeys.add(clean.plate_key);
-      existingIds.add(clean.id);
-      added.push(clean);
+
+      const log: AuditLogRecord = {
+        id: generateId('log'),
+        timestamp: new Date().toISOString(),
+        actor: req.caller!.actorName,
+        action: 'CREATE',
+        entity: 'vehicle',
+        summary: `Admin nạp danh sách ${added.length} biển số xe mới`,
+        details:
+          added
+            .map((v) => v.plate)
+            .slice(0, 8)
+            .join(', ') + (added.length > 8 ? '...' : ''),
+      };
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        vehicles: [...added, ...prev.vehicles],
+        auditLogs: [log, ...prev.auditLogs],
+      }));
+
+      res.status(201).json({ ok: true, added, skipped, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Không thể nạp danh sách xe.' });
     }
-
-    if (added.length === 0) {
-      res.json({ ok: true, added: [], skipped, state: dbState });
-      return;
-    }
-
-    const log: AuditLogRecord = {
-      id: generateId('log'),
-      timestamp: new Date().toISOString(),
-      actor: req.caller!.actorName,
-      action: 'CREATE',
-      entity: 'vehicle',
-      summary: `Admin nạp danh sách ${added.length} biển số xe mới`,
-      details:
-        added
-          .map((v) => v.plate)
-          .slice(0, 8)
-          .join(', ') + (added.length > 8 ? '...' : ''),
-    };
-
-    const state = commitMutation((prev) => ({
-      ...prev,
-      vehicles: [...added, ...prev.vehicles],
-      auditLogs: [log, ...prev.auditLogs],
-    }));
-
-    res.status(201).json({ ok: true, added, skipped, state });
   }
 );
 
@@ -1120,81 +1343,86 @@ app.patch(
   '/api/fleet/vehicles/:id',
   requireAuth,
   requireAdmin,
-  (req: AuthedRequest, res: Response) => {
-    if (!dbState) {
-      res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-      return;
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
+
+      const vehicleId = safeString(req.params.id, 64);
+      const target = dbState.vehicles.find((v) => v.id === vehicleId);
+      if (!target) {
+        res.status(404).json({ ok: false, error: 'Không tìm thấy xe.' });
+        return;
+      }
+
+      const updates = (req.body?.updates || req.body || {}) as Record<string, unknown>;
+      const nextPlate =
+        typeof updates.plate === 'string' && updates.plate.trim()
+          ? formatVietnamesePlate(updates.plate)
+          : target.plate;
+      const nextPlateKey = normalizePlateKey(nextPlate);
+
+      if (
+        nextPlateKey !== target.plate_key &&
+        dbState.vehicles.some((v) => v.id !== vehicleId && v.plate_key === nextPlateKey)
+      ) {
+        res.status(409).json({ ok: false, error: `Biển số ${nextPlate} đã tồn tại.` });
+        return;
+      }
+
+      const updated: VehicleRecord = {
+        ...target,
+        plate: nextPlate,
+        plate_key: nextPlateKey,
+        type:
+          typeof updates.type === 'string' && updates.type.trim()
+            ? safeString(updates.type, 80)
+            : target.type,
+        brand_model:
+          typeof updates.brand_model === 'string'
+            ? safeString(updates.brand_model, 120, target.brand_model)
+            : target.brand_model,
+        driver_name:
+          typeof updates.driver_name === 'string'
+            ? safeString(updates.driver_name, 100, target.driver_name)
+            : target.driver_name,
+        department:
+          typeof updates.department === 'string' && updates.department.trim()
+            ? safeString(updates.department, 80)
+            : target.department,
+        status:
+          typeof updates.status === 'string' && updates.status.trim()
+            ? safeString(updates.status, 40)
+            : target.status,
+        registration_due_date:
+          typeof updates.registration_due_date === 'string' && updates.registration_due_date.trim()
+            ? safeString(updates.registration_due_date, 20)
+            : target.registration_due_date,
+      };
+
+      const log: AuditLogRecord = {
+        id: generateId('log'),
+        timestamp: new Date().toISOString(),
+        actor: req.caller!.actorName,
+        action: 'UPDATE',
+        entity: 'vehicle',
+        summary: `Cập nhật thông tin xe ${updated.plate}`,
+        details: `Trạng thái: ${updated.status} · Km hiện tại: ${updated.current_km.toLocaleString('vi-VN')} km`,
+      };
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        vehicles: prev.vehicles.map((v) => (v.id === vehicleId ? updated : v)),
+        auditLogs: [log, ...prev.auditLogs],
+      }));
+
+      res.json({ ok: true, vehicle: updated, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Không thể cập nhật thông tin xe.' });
     }
-
-    const vehicleId = safeString(req.params.id, 64);
-    const target = dbState.vehicles.find((v) => v.id === vehicleId);
-    if (!target) {
-      res.status(404).json({ ok: false, error: 'Không tìm thấy xe.' });
-      return;
-    }
-
-    const updates = (req.body?.updates || req.body || {}) as Record<string, unknown>;
-    const nextPlate =
-      typeof updates.plate === 'string' && updates.plate.trim()
-        ? formatVietnamesePlate(updates.plate)
-        : target.plate;
-    const nextPlateKey = normalizePlateKey(nextPlate);
-
-    if (
-      nextPlateKey !== target.plate_key &&
-      dbState.vehicles.some((v) => v.id !== vehicleId && v.plate_key === nextPlateKey)
-    ) {
-      res.status(409).json({ ok: false, error: `Biển số ${nextPlate} đã tồn tại.` });
-      return;
-    }
-
-    const updated: VehicleRecord = {
-      ...target,
-      plate: nextPlate,
-      plate_key: nextPlateKey,
-      type:
-        typeof updates.type === 'string' && updates.type.trim()
-          ? safeString(updates.type, 80)
-          : target.type,
-      brand_model:
-        typeof updates.brand_model === 'string'
-          ? safeString(updates.brand_model, 120, target.brand_model)
-          : target.brand_model,
-      driver_name:
-        typeof updates.driver_name === 'string'
-          ? safeString(updates.driver_name, 100, target.driver_name)
-          : target.driver_name,
-      department:
-        typeof updates.department === 'string' && updates.department.trim()
-          ? safeString(updates.department, 80)
-          : target.department,
-      status:
-        typeof updates.status === 'string' && updates.status.trim()
-          ? safeString(updates.status, 40)
-          : target.status,
-      registration_due_date:
-        typeof updates.registration_due_date === 'string' && updates.registration_due_date.trim()
-          ? safeString(updates.registration_due_date, 20)
-          : target.registration_due_date,
-    };
-
-    const log: AuditLogRecord = {
-      id: generateId('log'),
-      timestamp: new Date().toISOString(),
-      actor: req.caller!.actorName,
-      action: 'UPDATE',
-      entity: 'vehicle',
-      summary: `Cập nhật thông tin xe ${updated.plate}`,
-      details: `Trạng thái: ${updated.status} · Km hiện tại: ${updated.current_km.toLocaleString('vi-VN')} km`,
-    };
-
-    const state = commitMutation((prev) => ({
-      ...prev,
-      vehicles: prev.vehicles.map((v) => (v.id === vehicleId ? updated : v)),
-      auditLogs: [log, ...prev.auditLogs],
-    }));
-
-    res.json({ ok: true, vehicle: updated, state });
   }
 );
 
@@ -1203,368 +1431,408 @@ app.patch(
   '/api/fleet/items/:id/po',
   requireAuth,
   requireAdmin,
-  (req: AuthedRequest, res: Response) => {
-    if (!dbState) {
-      res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-      return;
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
+
+      const itemId = safeString(req.params.id, 64);
+      const target = dbState.items.find((i) => i.id === itemId);
+      if (!target) {
+        res.status(404).json({ error: 'Không tìm thấy hạng mục.' });
+        return;
+      }
+
+      const cleanPo = safeString(req.body?.poNumber, 60, '').toUpperCase();
+      const log: AuditLogRecord = {
+        id: generateId('log'),
+        timestamp: new Date().toISOString(),
+        actor: req.caller!.actorName,
+        action: 'UPDATE',
+        entity: 'item',
+        summary: `Gán số PO "${cleanPo || 'Trống'}" cho hạng mục "${target.item_name}"`,
+        details: `Thành tiền: ${formatVND(target.amount)}`,
+      };
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        items: prev.items.map((i) => (i.id === itemId ? { ...i, po_number: cleanPo } : i)),
+        auditLogs: [log, ...prev.auditLogs],
+      }));
+
+      res.json({ ok: true, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ error: 'Không thể cập nhật số PO.' });
     }
-
-    const itemId = safeString(req.params.id, 64);
-    const target = dbState.items.find((i) => i.id === itemId);
-    if (!target) {
-      res.status(404).json({ error: 'Không tìm thấy hạng mục.' });
-      return;
-    }
-
-    const cleanPo = safeString(req.body?.poNumber, 60, '').toUpperCase();
-    const log: AuditLogRecord = {
-      id: generateId('log'),
-      timestamp: new Date().toISOString(),
-      actor: req.caller!.actorName,
-      action: 'UPDATE',
-      entity: 'item',
-      summary: `Gán số PO "${cleanPo || 'Trống'}" cho hạng mục "${target.item_name}"`,
-      details: `Thành tiền: ${formatVND(target.amount)}`,
-    };
-
-    const state = commitMutation((prev) => ({
-      ...prev,
-      items: prev.items.map((i) => (i.id === itemId ? { ...i, po_number: cleanPo } : i)),
-      auditLogs: [log, ...prev.auditLogs],
-    }));
-
-    res.json({ ok: true, state });
   }
 );
 
 // 13. UPDATE MONTHLY BUDGET (Admin ONLY)
-app.put('/api/fleet/budget', requireAuth, requireAdmin, (req: AuthedRequest, res: Response) => {
-  if (!dbState) {
-    res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-    return;
+app.put(
+  '/api/fleet/budget',
+  requireAuth,
+  requireAdmin,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
+
+      const nextBudget = Math.max(
+        1_000_000,
+        safeNonNegativeNumber(req.body?.monthlyBudget, dbState.monthlyBudget)
+      );
+      const log: AuditLogRecord = {
+        id: generateId('log'),
+        timestamp: new Date().toISOString(),
+        actor: req.caller!.actorName,
+        action: 'UPDATE',
+        entity: 'system',
+        summary: `Cập nhật ngân sách bảo dưỡng tháng thành ${formatVND(nextBudget)}`,
+      };
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        monthlyBudget: nextBudget,
+        auditLogs: [log, ...prev.auditLogs],
+      }));
+
+      res.json({ ok: true, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ error: 'Không thể cập nhật ngân sách.' });
+    }
   }
-
-  const nextBudget = Math.max(
-    1_000_000,
-    safeNonNegativeNumber(req.body?.monthlyBudget, dbState.monthlyBudget)
-  );
-  const log: AuditLogRecord = {
-    id: generateId('log'),
-    timestamp: new Date().toISOString(),
-    actor: req.caller!.actorName,
-    action: 'UPDATE',
-    entity: 'system',
-    summary: `Cập nhật ngân sách bảo dưỡng tháng thành ${formatVND(nextBudget)}`,
-  };
-
-  const state = commitMutation((prev) => ({
-    ...prev,
-    monthlyBudget: nextBudget,
-    auditLogs: [log, ...prev.auditLogs],
-  }));
-
-  res.json({ ok: true, state });
-});
+);
 
 // 14. UPDATE VISIBILITY & DASHBOARD BLOCK ORDER (Admin ONLY)
 app.put(
   '/api/fleet/visibility',
   requireAuth,
   requireAdmin,
-  (req: AuthedRequest, res: Response) => {
-    if (!dbState) {
-      res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-      return;
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
+
+      const body = (req.body || {}) as Record<string, unknown>;
+      const hiddenReportTabs = Array.isArray(body.hiddenReportTabs)
+        ? body.hiddenReportTabs.filter(
+            (t): t is string =>
+              typeof t === 'string' && VALID_APP_PAGES.has(t) && t !== 'dashboard'
+          )
+        : dbState.hiddenReportTabs;
+
+      const hiddenDashboardBlocks = Array.isArray(body.hiddenDashboardBlocks)
+        ? body.hiddenDashboardBlocks.filter(
+            (b): b is string => typeof b === 'string' && VALID_DASHBOARD_BLOCKS.has(b)
+          )
+        : dbState.hiddenDashboardBlocks;
+
+      const dashboardBlockOrder = body.dashboardBlockOrder
+        ? normalizeBlockOrder(body.dashboardBlockOrder)
+        : dbState.dashboardBlockOrder;
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        hiddenReportTabs,
+        hiddenDashboardBlocks,
+        dashboardBlockOrder,
+      }));
+
+      res.json({ ok: true, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ error: 'Không thể lưu cấu hình hiển thị.' });
     }
-
-    const body = (req.body || {}) as Record<string, unknown>;
-    const hiddenReportTabs = Array.isArray(body.hiddenReportTabs)
-      ? body.hiddenReportTabs.filter(
-          (t): t is string =>
-            typeof t === 'string' && VALID_APP_PAGES.has(t) && t !== 'dashboard'
-        )
-      : dbState.hiddenReportTabs;
-
-    const hiddenDashboardBlocks = Array.isArray(body.hiddenDashboardBlocks)
-      ? body.hiddenDashboardBlocks.filter(
-          (b): b is string => typeof b === 'string' && VALID_DASHBOARD_BLOCKS.has(b)
-        )
-      : dbState.hiddenDashboardBlocks;
-
-    const dashboardBlockOrder = body.dashboardBlockOrder
-      ? normalizeBlockOrder(body.dashboardBlockOrder)
-      : dbState.dashboardBlockOrder;
-
-    const state = commitMutation((prev) => ({
-      ...prev,
-      hiddenReportTabs,
-      hiddenDashboardBlocks,
-      dashboardBlockOrder,
-    }));
-
-    res.json({ ok: true, state });
   }
 );
 
 // 15. EXCEL / CSV UPSERT IMPORT (Admin ONLY)
-app.post('/api/fleet/import', requireAuth, requireAdmin, (req: AuthedRequest, res: Response) => {
-  if (!dbState) {
-    res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-    return;
-  }
+app.post(
+  '/api/fleet/import',
+  requireAuth,
+  requireAdmin,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
 
-  const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
-  const validRows = rawRows.filter(
-    (r: unknown): r is Record<string, unknown> =>
-      Boolean(r && typeof r === 'object' && (r as Record<string, unknown>).status !== 'error')
-  );
+      const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+      const validRows = rawRows.filter(
+        (r: unknown): r is Record<string, unknown> =>
+          Boolean(r && typeof r === 'object' && (r as Record<string, unknown>).status !== 'error')
+      );
 
-  if (validRows.length === 0) {
-    res.json({ ok: true, inserted: 0, updated: 0, createdVehicles: 0, state: dbState });
-    return;
-  }
+      if (validRows.length === 0) {
+        res.json({ ok: true, inserted: 0, updated: 0, createdVehicles: 0, state: dbState });
+        return;
+      }
 
-  const now = new Date().toISOString();
-  let inserted = 0;
-  let updated = 0;
-  let createdVehicles = 0;
+      const now = new Date().toISOString();
+      let inserted = 0;
+      let updated = 0;
+      let createdVehicles = 0;
 
-  const state = commitMutation((prev) => {
-    const vehicles = [...prev.vehicles];
-    const orders = [...prev.orders];
-    const items = [...prev.items];
-    const vehByPlateKey = new Map(vehicles.map((v) => [v.plate_key, v]));
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => {
+        const vehicles = [...prev.vehicles];
+        const orders = [...prev.orders];
+        const items = [...prev.items];
+        const vehByPlateKey = new Map(vehicles.map((v) => [v.plate_key, v]));
 
-    for (const row of validRows) {
-      const formattedPlate = formatVietnamesePlate(String(row.plate || ''));
-      const plateKey = normalizePlateKey(String(row.plate_key || formattedPlate));
-      if (!plateKey) continue;
+        for (const row of validRows) {
+          const formattedPlate = formatVietnamesePlate(String(row.plate || ''));
+          const plateKey = normalizePlateKey(String(row.plate_key || formattedPlate));
+          if (!plateKey) continue;
 
-      const odometerKm = safeNonNegativeNumber(row.odometer_km, 0);
-      const serviceDate = safeString(row.service_date, 20, REFERENCE_TODAY);
-      const driverName = safeString(row.driver_name, 100, '');
-      const garage = safeString(row.garage, 120, 'Chưa xác định');
-      const serviceType = safeString(row.service_type, 60, 'Định kỳ');
-      const note = safeString(row.note, 500, '');
-      const itemName = safeString(row.item_name, 200);
-      if (!itemName) continue;
-      const poNumber = safeString(row.po_number, 60, '').toUpperCase();
-      const category = safeString(row.category, 60, 'Khác') || 'Khác';
-      const action = row.action === 'SỬA CHỮA' ? 'SỬA CHỮA' : 'THAY THẾ';
-      const partName = safeString(row.part_name, 200, '');
-      const quantity = Math.max(1, safeNonNegativeNumber(row.quantity, 1));
-      const unitPrice = safeNonNegativeNumber(row.unit_price, 0);
-      const amount = safeNonNegativeNumber(row.amount, unitPrice * quantity);
+          const odometerKm = safeNonNegativeNumber(row.odometer_km, 0);
+          const serviceDate = safeString(row.service_date, 20, REFERENCE_TODAY);
+          const driverName = safeString(row.driver_name, 100, '');
+          const garage = safeString(row.garage, 120, 'Chưa xác định');
+          const serviceType = safeString(row.service_type, 60, 'Định kỳ');
+          const note = safeString(row.note, 500, '');
+          const itemName = safeString(row.item_name, 200);
+          if (!itemName) continue;
+          const poNumber = safeString(row.po_number, 60, '').toUpperCase();
+          const category = safeString(row.category, 60, 'Khác') || 'Khác';
+          const action = row.action === 'SỬA CHỮA' ? 'SỬA CHỮA' : 'THAY THẾ';
+          const partName = safeString(row.part_name, 200, '');
+          const quantity = Math.max(1, safeNonNegativeNumber(row.quantity, 1));
+          const unitPrice = safeNonNegativeNumber(row.unit_price, 0);
+          const amount = safeNonNegativeNumber(row.amount, unitPrice * quantity);
 
-      let veh = vehByPlateKey.get(plateKey);
-      if (!veh) {
-        veh = {
-          id: generateId('veh'),
-          plate: formattedPlate,
-          plate_key: plateKey,
-          type: 'Xe bán tải',
-          brand_model: 'Chưa cập nhật',
-          driver_name: driverName || 'Chưa phân công',
-          department: 'Văn Phòng HCM',
-          status: 'Đang hoạt động',
-          registration_due_date: addDaysISO(REFERENCE_TODAY, 180),
-          current_km: odometerKm,
-          service_interval_km: 10000,
-          service_interval_days: 90,
-          next_service_km: odometerKm ? odometerKm + 10000 : 0,
-          next_service_date: addDaysISO(serviceDate, 90),
-        };
-        vehicles.push(veh);
-        vehByPlateKey.set(plateKey, veh);
-        createdVehicles += 1;
-      } else if (odometerKm > veh.current_km) {
-        const idx = vehicles.findIndex((v) => v.id === veh!.id);
-        if (idx >= 0) {
-          vehicles[idx] = { ...vehicles[idx], current_km: odometerKm };
-          veh = vehicles[idx];
-          vehByPlateKey.set(plateKey, veh);
+          let veh = vehByPlateKey.get(plateKey);
+          if (!veh) {
+            veh = {
+              id: generateId('veh'),
+              plate: formattedPlate,
+              plate_key: plateKey,
+              type: 'Xe bán tải',
+              brand_model: 'Chưa cập nhật',
+              driver_name: driverName || 'Chưa phân công',
+              department: 'Văn Phòng HCM',
+              status: 'Đang hoạt động',
+              registration_due_date: addDaysISO(REFERENCE_TODAY, 180),
+              current_km: odometerKm,
+              service_interval_km: 10000,
+              service_interval_days: 90,
+              next_service_km: odometerKm ? odometerKm + 10000 : 0,
+              next_service_date: addDaysISO(serviceDate, 90),
+            };
+            vehicles.push(veh);
+            vehByPlateKey.set(plateKey, veh);
+            createdVehicles += 1;
+          } else if (odometerKm > veh.current_km) {
+            const idx = vehicles.findIndex((v) => v.id === veh!.id);
+            if (idx >= 0) {
+              vehicles[idx] = { ...vehicles[idx], current_km: odometerKm };
+              veh = vehicles[idx];
+              vehByPlateKey.set(plateKey, veh);
+            }
+          }
+
+          let order = orders.find(
+            (o) => o.vehicle_id === veh!.id && o.service_date === serviceDate
+          );
+          if (!order) {
+            order = {
+              id: generateId('ord'),
+              vehicle_id: veh.id,
+              service_date: serviceDate,
+              odometer_km: odometerKm,
+              garage,
+              driver_name: driverName || veh.driver_name,
+              service_type: serviceType,
+              note,
+              created_at: now,
+              updated_at: now,
+            };
+            orders.push(order);
+          } else {
+            const oIdx = orders.findIndex((o) => o.id === order!.id);
+            orders[oIdx] = {
+              ...order,
+              odometer_km: odometerKm || order.odometer_km,
+              garage: garage || order.garage,
+              note: note || order.note,
+              updated_at: now,
+            };
+            order = orders[oIdx];
+          }
+
+          const existingIdx = items.findIndex(
+            (it) =>
+              it.order_id === order!.id &&
+              it.item_name.trim().toLowerCase() === itemName.toLowerCase() &&
+              it.po_number.trim().toUpperCase() === poNumber
+          );
+
+          if (existingIdx >= 0) {
+            items[existingIdx] = {
+              ...items[existingIdx],
+              category,
+              action,
+              part_name: partName,
+              quantity,
+              unit_price: unitPrice,
+              amount,
+            };
+            updated += 1;
+          } else {
+            items.push({
+              id: generateId('it'),
+              order_id: order.id,
+              category,
+              item_name: itemName,
+              action,
+              part_name: partName,
+              quantity,
+              unit_price: unitPrice,
+              amount,
+              po_number: poNumber,
+            });
+            inserted += 1;
+          }
         }
-      }
 
-      let order = orders.find(
-        (o) => o.vehicle_id === veh!.id && o.service_date === serviceDate
-      );
-      if (!order) {
-        order = {
-          id: generateId('ord'),
-          vehicle_id: veh.id,
-          service_date: serviceDate,
-          odometer_km: odometerKm,
-          garage,
-          driver_name: driverName || veh.driver_name,
-          service_type: serviceType,
-          note,
-          created_at: now,
-          updated_at: now,
+        const log: AuditLogRecord = {
+          id: generateId('log'),
+          timestamp: now,
+          actor: req.caller!.actorName,
+          action: 'IMPORT',
+          entity: 'system',
+          summary: `Nhập Excel/CSV (UPSERT): thêm mới ${inserted}, cập nhật ${updated} hạng mục`,
+          details:
+            createdVehicles > 0
+              ? `Tự động tạo thêm ${createdVehicles} xe mới chưa có trong danh mục`
+              : 'Khớp hoàn toàn với danh sách xe hiện có',
         };
-        orders.push(order);
-      } else {
-        const oIdx = orders.findIndex((o) => o.id === order!.id);
-        orders[oIdx] = {
-          ...order,
-          odometer_km: odometerKm || order.odometer_km,
-          garage: garage || order.garage,
-          note: note || order.note,
-          updated_at: now,
-        };
-        order = orders[oIdx];
-      }
 
-      const existingIdx = items.findIndex(
-        (it) =>
-          it.order_id === order!.id &&
-          it.item_name.trim().toLowerCase() === itemName.toLowerCase() &&
-          it.po_number.trim().toUpperCase() === poNumber
-      );
-
-      if (existingIdx >= 0) {
-        items[existingIdx] = {
-          ...items[existingIdx],
-          category,
-          action,
-          part_name: partName,
-          quantity,
-          unit_price: unitPrice,
-          amount,
+        return {
+          ...prev,
+          vehicles,
+          orders,
+          items,
+          auditLogs: [log, ...prev.auditLogs],
         };
-        updated += 1;
-      } else {
-        items.push({
-          id: generateId('it'),
-          order_id: order.id,
-          category,
-          item_name: itemName,
-          action,
-          part_name: partName,
-          quantity,
-          unit_price: unitPrice,
-          amount,
-          po_number: poNumber,
-        });
-        inserted += 1;
-      }
+      });
+
+      res.json({ ok: true, inserted, updated, createdVehicles, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ error: 'Không thể nhập dữ liệu Excel/CSV.' });
     }
-
-    const log: AuditLogRecord = {
-      id: generateId('log'),
-      timestamp: now,
-      actor: req.caller!.actorName,
-      action: 'IMPORT',
-      entity: 'system',
-      summary: `Nhập Excel/CSV (UPSERT): thêm mới ${inserted}, cập nhật ${updated} hạng mục`,
-      details:
-        createdVehicles > 0
-          ? `Tự động tạo thêm ${createdVehicles} xe mới chưa có trong danh mục`
-          : 'Khớp hoàn toàn với danh sách xe hiện có',
-    };
-
-    return {
-      ...prev,
-      vehicles,
-      orders,
-      items,
-      auditLogs: [log, ...prev.auditLogs],
-    };
-  });
-
-  res.json({ ok: true, inserted, updated, createdVehicles, state });
-});
+  }
+);
 
 // 16. RESET DEMO DATA (Admin ONLY)
-app.post('/api/fleet/reset', requireAuth, requireAdmin, (req: AuthedRequest, res: Response) => {
-  if (!dbState) {
-    res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
-    return;
+app.post(
+  '/api/fleet/reset',
+  requireAuth,
+  requireAdmin,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      await hydrateLatestState(req.caller!);
+      if (!dbState) {
+        res.status(503).json({ error: 'Cơ sở dữ liệu chưa được khởi tạo.' });
+        return;
+      }
+
+      const body = (req.body || {}) as Record<string, unknown>;
+      if (!Array.isArray(body.vehicles) || !Array.isArray(body.orders) || !Array.isArray(body.items)) {
+        res.status(400).json({ error: 'Dữ liệu mẫu không hợp lệ.' });
+        return;
+      }
+
+      const vehicles: VehicleRecord[] = [];
+      for (const rawVeh of body.vehicles) {
+        if (!rawVeh || typeof rawVeh !== 'object') continue;
+        const clean = sanitizeVehicle(rawVeh as Record<string, unknown>);
+        if (clean) vehicles.push(clean);
+      }
+
+      const orders: OrderRecord[] = [];
+      for (const rawOrd of body.orders) {
+        if (!rawOrd || typeof rawOrd !== 'object') continue;
+        const o = rawOrd as Record<string, unknown>;
+        const id = sanitizeClientId(o.id, 'ord') || generateId('ord');
+        const vehicleId = safeString(o.vehicle_id, 64);
+        const serviceDate = safeString(o.service_date, 20);
+        if (!vehicleId || !serviceDate) continue;
+        orders.push({
+          id,
+          vehicle_id: vehicleId,
+          service_date: serviceDate,
+          odometer_km: safeNonNegativeNumber(o.odometer_km, 0),
+          service_interval_km:
+            typeof o.service_interval_km === 'number' && o.service_interval_km >= 1000
+              ? Math.round(o.service_interval_km)
+              : undefined,
+          garage: safeString(o.garage, 120, 'Chưa xác định'),
+          driver_name: safeString(o.driver_name, 100, ''),
+          service_type: safeString(o.service_type, 60, 'Định kỳ'),
+          note: safeString(o.note, 500, ''),
+          created_at: safeString(o.created_at, 40) || new Date().toISOString(),
+          updated_at: safeString(o.updated_at, 40) || new Date().toISOString(),
+        });
+      }
+
+      const items: ItemRecord[] = [];
+      for (const rawIt of body.items) {
+        if (!rawIt || typeof rawIt !== 'object') continue;
+        const it = rawIt as Record<string, unknown>;
+        const orderId = safeString(it.order_id, 64);
+        if (!orderId) continue;
+        const clean = sanitizeItem(it, orderId, true);
+        if (clean) items.push(clean);
+      }
+
+      const now = new Date().toISOString();
+      const seedLogs: AuditLogRecord[] = Array.isArray(body.auditLogs)
+        ? body.auditLogs
+            .filter((l): l is Record<string, unknown> => Boolean(l && typeof l === 'object'))
+            .map((l) => ({
+              id: sanitizeClientId(l.id, 'log') || generateId('log'),
+              timestamp: safeString(l.timestamp, 40) || now,
+              actor: safeString(l.actor, 100, 'Hệ thống'),
+              action: safeString(l.action, 20, 'UPDATE'),
+              entity: safeString(l.entity, 20, 'system'),
+              summary: safeString(l.summary, 300, ''),
+              details: typeof l.details === 'string' ? l.details.slice(0, 400) : undefined,
+            }))
+        : [];
+
+      const resetLog: AuditLogRecord = {
+        id: generateId('log'),
+        timestamp: now,
+        actor: req.caller!.actorName,
+        action: 'UPDATE',
+        entity: 'system',
+        summary: `Khôi phục dữ liệu mẫu ban đầu (${vehicles.length} xe, ${orders.length} phiếu)`,
+      };
+
+      const { state, supabaseSynced } = await commitMutation(req.caller!, (prev) => ({
+        ...prev,
+        vehicles,
+        orders,
+        items,
+        auditLogs: [resetLog, ...seedLogs],
+      }));
+
+      res.json({ ok: true, state, supabaseSynced });
+    } catch {
+      res.status(500).json({ error: 'Không thể khôi phục dữ liệu.' });
+    }
   }
-
-  const body = (req.body || {}) as Record<string, unknown>;
-  if (!Array.isArray(body.vehicles) || !Array.isArray(body.orders) || !Array.isArray(body.items)) {
-    res.status(400).json({ error: 'Dữ liệu mẫu không hợp lệ.' });
-    return;
-  }
-
-  const vehicles: VehicleRecord[] = [];
-  for (const rawVeh of body.vehicles) {
-    if (!rawVeh || typeof rawVeh !== 'object') continue;
-    const clean = sanitizeVehicle(rawVeh as Record<string, unknown>);
-    if (clean) vehicles.push(clean);
-  }
-
-  const orders: OrderRecord[] = [];
-  for (const rawOrd of body.orders) {
-    if (!rawOrd || typeof rawOrd !== 'object') continue;
-    const o = rawOrd as Record<string, unknown>;
-    const id = sanitizeClientId(o.id, 'ord') || generateId('ord');
-    const vehicleId = safeString(o.vehicle_id, 64);
-    const serviceDate = safeString(o.service_date, 20);
-    if (!vehicleId || !serviceDate) continue;
-    orders.push({
-      id,
-      vehicle_id: vehicleId,
-      service_date: serviceDate,
-      odometer_km: safeNonNegativeNumber(o.odometer_km, 0),
-      service_interval_km:
-        typeof o.service_interval_km === 'number' && o.service_interval_km >= 1000
-          ? Math.round(o.service_interval_km)
-          : undefined,
-      garage: safeString(o.garage, 120, 'Chưa xác định'),
-      driver_name: safeString(o.driver_name, 100, ''),
-      service_type: safeString(o.service_type, 60, 'Định kỳ'),
-      note: safeString(o.note, 500, ''),
-      created_at: safeString(o.created_at, 40) || new Date().toISOString(),
-      updated_at: safeString(o.updated_at, 40) || new Date().toISOString(),
-    });
-  }
-
-  const items: ItemRecord[] = [];
-  for (const rawIt of body.items) {
-    if (!rawIt || typeof rawIt !== 'object') continue;
-    const it = rawIt as Record<string, unknown>;
-    const orderId = safeString(it.order_id, 64);
-    if (!orderId) continue;
-    const clean = sanitizeItem(it, orderId, true);
-    if (clean) items.push(clean);
-  }
-
-  const now = new Date().toISOString();
-  const seedLogs: AuditLogRecord[] = Array.isArray(body.auditLogs)
-    ? body.auditLogs
-        .filter((l): l is Record<string, unknown> => Boolean(l && typeof l === 'object'))
-        .map((l) => ({
-          id: sanitizeClientId(l.id, 'log') || generateId('log'),
-          timestamp: safeString(l.timestamp, 40) || now,
-          actor: safeString(l.actor, 100, 'Hệ thống'),
-          action: safeString(l.action, 20, 'UPDATE'),
-          entity: safeString(l.entity, 20, 'system'),
-          summary: safeString(l.summary, 300, ''),
-          details: typeof l.details === 'string' ? l.details.slice(0, 400) : undefined,
-        }))
-    : [];
-
-  const resetLog: AuditLogRecord = {
-    id: generateId('log'),
-    timestamp: now,
-    actor: req.caller!.actorName,
-    action: 'UPDATE',
-    entity: 'system',
-    summary: `Khôi phục dữ liệu mẫu ban đầu (${vehicles.length} xe, ${orders.length} phiếu)`,
-  };
-
-  const state = commitMutation((prev) => ({
-    ...prev,
-    vehicles,
-    orders,
-    items,
-    auditLogs: [resetLog, ...seedLogs],
-  }));
-
-  res.json({ ok: true, state });
-});
+);
 
 // ==================== VITE DEV MIDDLEWARE / PROD STATIC ====================
 

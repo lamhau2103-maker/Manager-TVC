@@ -73,8 +73,8 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
         </div>
       ) : (
         <>
-          {/* MOBILE (< 640px): Vertical Expandable Glass Cards */}
-          <div className="sm:hidden divide-y divide-white/65">
+          {/* MOBILE & SMALL TABLET (< 768px): Vertical Expandable Glass Cards */}
+          <div className="md:hidden divide-y divide-white/65">
             {orders.map((ord) => {
               const isExpanded = Boolean(expandedIds[ord.id]);
               return (
@@ -283,9 +283,9 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
             })}
           </div>
 
-          {/* TABLET & DESKTOP (>= 640px): Full Table with horizontal scroll protection */}
-          <div className="hidden sm:block overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+          {/* TABLET LANDSCAPE & DESKTOP (>= 768px): Full Table with horizontal scroll protection */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[820px] text-left border-collapse">
               <thead>
                 <tr className="border-b border-white/60 bg-white/40 backdrop-blur-md text-[11px] font-semibold text-slate-600">
                   <th className="py-3 pl-4 pr-2 w-8" />

@@ -83,9 +83,9 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto lg:self-center">
+        <div className="flex items-center gap-2 w-full lg:w-auto lg:self-center min-w-0">
           {/* Filter Tabs */}
-          <div className="w-full sm:w-auto scroll-snap-x">
+          <div className="flex-1 sm:flex-initial min-w-0 scroll-snap-x">
             <div className="inline-flex items-center gap-1 p-1 rounded-xl glass-segment min-w-max">
               {(
                 [
@@ -116,7 +116,7 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
               type="button"
               onClick={() => onToggleBlock('monthly_status')}
               title="Quyền Admin: Ẩn khối Thông tin bảo dưỡng trong tháng ( đến hiện tại )"
-              className="min-w-[38px] min-h-[38px] sm:min-w-[32px] sm:min-h-[32px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-500 hover:text-red-700 hover:bg-white/85 transition-colors"
+              className="min-w-[38px] min-h-[38px] sm:min-w-[32px] sm:min-h-[32px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-500 hover:text-red-700 hover:bg-white/85 transition-colors shrink-0"
             >
               <EyeOff className="w-3.5 h-3.5" />
             </button>
@@ -138,7 +138,7 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
           Không có xe nào thuộc nhóm lọc này trong {periodLabel.toLowerCase()}.
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
           {filteredVehicleStatuses.map((row) => {
             const v = row.vehicle;
             const isOverdue = row.dueStatus === 'overdue';

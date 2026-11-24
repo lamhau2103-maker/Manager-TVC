@@ -668,10 +668,10 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
               {/* Row A: Ngày bảo dưỡng, Biển số xe, Số km hiện tại, Chu kỳ km/lần */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-start">
                 {/* 1. Ngày bảo dưỡng */}
-                <div className="lg:col-span-3">
+                <div className="lg:col-span-3 min-w-0">
                   <label
                     htmlFor="order-service-date"
-                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5 whitespace-nowrap"
                   >
                     Ngày bảo dưỡng *
                   </label>
@@ -686,7 +686,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 </div>
 
                 {/* 2. Biển số xe */}
-                <div className="lg:col-span-4">
+                <div className="lg:col-span-4 min-w-0">
                   <PlateInput
                     id="order-plate-input"
                     label={`Biển số xe * (${vehicles.length} xe đã nạp)`}
@@ -711,10 +711,10 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 </div>
 
                 {/* 3. Số km hiện tại */}
-                <div className="lg:col-span-3">
+                <div className="lg:col-span-3 min-w-0">
                   <label
                     htmlFor="order-odometer-km"
-                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5 whitespace-nowrap"
                   >
                     Số km hiện tại
                   </label>
@@ -735,10 +735,10 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 </div>
 
                 {/* 4. Chu kỳ km / lần */}
-                <div className="lg:col-span-2">
+                <div className="lg:col-span-2 min-w-0">
                   <label
                     htmlFor="order-interval-km"
-                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5 whitespace-nowrap"
                   >
                     Chu kỳ km / lần
                   </label>
@@ -1008,7 +1008,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-                      <div className="sm:col-span-6">
+                      <div className="sm:col-span-12 md:col-span-5 min-w-0">
                         <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
                           Tên hạng mục *
                         </label>
@@ -1017,11 +1017,11 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                           value={row.item_name}
                           onChange={(e) => updateItem(row.localId, { item_name: e.target.value })}
                           placeholder="VD: Thay má phanh trước, thay nhớt động cơ..."
-                          className="glass-input w-full h-9 px-3 rounded-xl text-xs"
+                          className="glass-input w-full h-10 sm:h-9 px-3 rounded-xl text-xs"
                         />
                       </div>
 
-                      <div className="sm:col-span-2">
+                      <div className="sm:col-span-5 md:col-span-2 min-w-0">
                         <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
                           Hành động
                         </label>
@@ -1032,14 +1032,14 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                               action: e.target.value as MaintenanceAction,
                             })
                           }
-                          className="glass-input w-full h-9 px-2.5 rounded-xl text-xs font-semibold"
+                          className="glass-input w-full h-10 sm:h-9 px-2.5 rounded-xl text-xs font-semibold"
                         >
                           <option value="THAY THẾ">THAY THẾ</option>
                           <option value="SỬA CHỮA">SỬA CHỮA</option>
                         </select>
                       </div>
 
-                      <div className="sm:col-span-1">
+                      <div className="sm:col-span-3 md:col-span-2 min-w-0">
                         <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
                           SL
                         </label>
@@ -1051,11 +1051,11 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                           onChange={(e) =>
                             updateItem(row.localId, { quantity: Number(e.target.value) })
                           }
-                          className="glass-input w-full h-9 px-2 rounded-xl text-xs font-mono text-right"
+                          className="glass-input w-full h-10 sm:h-9 px-2.5 rounded-xl text-xs font-mono text-right"
                         />
                       </div>
 
-                      <div className="sm:col-span-3">
+                      <div className="sm:col-span-4 md:col-span-3 min-w-0">
                         <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
                           Số PO (hạng mục)
                         </label>
@@ -1066,7 +1066,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                             updateItem(row.localId, { po_number: e.target.value.toUpperCase() })
                           }
                           placeholder="PO-2026-..."
-                          className="glass-input w-full h-9 px-2.5 rounded-xl text-xs font-mono uppercase"
+                          className="glass-input w-full h-10 sm:h-9 px-2.5 rounded-xl text-xs font-mono uppercase"
                         />
                       </div>
                     </div>

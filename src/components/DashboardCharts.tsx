@@ -175,10 +175,10 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
   return (
     <section aria-label="Biểu đồ phân tích" className="space-y-4">
       {/* Row 1: Daily trend (7 cols) + Category Donut (5 cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
         {/* Chart 1 */}
         <ChartCard
-          className="lg:col-span-7"
+          className="xl:col-span-7 min-w-0"
           title="Chi phí diễn biến thế nào trong tháng?"
           subtitle={`So sánh ${periodLabel} với ${prevLabel} (đường nét đứt) · Đơn vị: VNĐ`}
           rightSlot={
@@ -268,7 +268,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
 
         {/* Chart 2 */}
         <ChartCard
-          className="lg:col-span-5"
+          className="xl:col-span-5 min-w-0"
           title="Tiền đang đi vào đâu?"
           subtitle="Phân bổ theo nhóm hạng mục (tối đa 6 màu) · Bấm vào lát cắt để lọc"
         >
@@ -277,8 +277,8 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
               Chưa có dữ liệu hạng mục trong kỳ chọn
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-12 items-center gap-3 h-full">
-              <div className="sm:col-span-6 relative h-[230px]">
+            <div className="grid grid-cols-1 sm:grid-cols-12 xl:grid-cols-1 2xl:grid-cols-12 items-center gap-3 h-full">
+              <div className="sm:col-span-6 xl:col-span-1 2xl:col-span-6 relative h-[220px] min-w-0">
                 <ResponsiveContainer key={`pie-${orientSeq}`} width="100%" height="100%">
                   <PieChart>
                     <Pie
@@ -328,7 +328,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
                 </div>
               </div>
 
-              <div className="sm:col-span-6 space-y-1.5">
+              <div className="sm:col-span-6 xl:col-span-1 2xl:col-span-6 space-y-1.5 min-w-0">
                 {categoryData.map((c) => {
                   const selected = activeCategory === c.name;
                   return (
@@ -370,10 +370,10 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
       </div>
 
       {/* Row 2: Top 10 Vehicles (6 cols) + PO Breakdown (6 cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
         {/* Chart 3: Side-by-side Vehicle Cost Comparison (Current vs Previous) */}
         <ChartCard
-          className="lg:col-span-6"
+          className="xl:col-span-6 min-w-0"
           title="Xe nào tốn nhiều nhất so với kỳ trước?"
           subtitle={`So sánh Top 10 xe: ${periodLabel} vs ${prevLabel} · Bấm cột để mở Hồ sơ xe`}
         >
@@ -468,7 +468,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
 
         {/* Chart 4 */}
         <ChartCard
-          className="lg:col-span-6"
+          className="xl:col-span-6 min-w-0"
           title="Mỗi PO chiếm bao nhiêu?"
           subtitle="Tổng hợp theo từng hạng mục gắn số PO · Bấm cột để lọc toàn dashboard"
         >
@@ -545,11 +545,11 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
         </ChartCard>
       </div>
 
-      {/* Row 3: 6-month Trend (5 cols) + Top Recurring Items (4 cols) + Repair vs Replace (3 cols -> better 12 col split: 5 + 7 or 6 + 6 + full) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+      {/* Row 3: 6-month Trend + Repair vs Replace */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
         {/* Chart 5: 6-Month Cost vs Monthly Budget */}
         <ChartCard
-          className="lg:col-span-6"
+          className="xl:col-span-6 min-w-0"
           title="Xu hướng chi phí 6 tháng so với ngân sách"
           subtitle={`Cột: Thực chi tháng (đỏ = vượt ngân sách ${formatCompactVND(monthlyBudget)}) · Nét đứt: Ngân sách tháng · Bấm cột chọn tháng`}
         >
@@ -642,7 +642,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
 
         {/* Chart 7: Sửa chữa hay thay thế? */}
         <ChartCard
-          className="lg:col-span-6"
+          className="xl:col-span-6 min-w-0"
           title="Sửa chữa hay thay thế?"
           subtitle="Tỷ lệ chi phí Thay thế so với Sửa chữa theo từng nhóm hạng mục · Bấm để lọc"
         >
