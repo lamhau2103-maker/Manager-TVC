@@ -98,8 +98,6 @@ export interface GlobalFilters {
 export type AppPage = 'dashboard' | 'orders' | 'vehicles' | 'po' | 'settings';
 
 export type DashboardBlockId =
-  | 'summary'
-  | 'budget_heatmap'
   | 'monthly_status'
   | 'alerts'
   | 'charts'

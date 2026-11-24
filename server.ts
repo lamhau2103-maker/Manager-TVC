@@ -22,8 +22,6 @@ const DB_FILE_PATH = path.resolve(DATA_DIR, 'fleet-db.json');
 const DEFAULT_MONTHLY_BUDGET = 320_000_000;
 const REFERENCE_TODAY = '2026-11-24';
 const DEFAULT_DASHBOARD_BLOCK_ORDER = [
-  'summary',
-  'budget_heatmap',
   'monthly_status',
   'alerts',
   'charts',
@@ -31,6 +29,41 @@ const DEFAULT_DASHBOARD_BLOCK_ORDER = [
 ];
 const VALID_APP_PAGES = new Set(['dashboard', 'orders', 'vehicles', 'po', 'settings']);
 const VALID_DASHBOARD_BLOCKS = new Set(DEFAULT_DASHBOARD_BLOCK_ORDER);
+const LEGACY_MOCK_VEHICLE_IDS = new Set([
+  'veh_01',
+  'veh_02',
+  'veh_03',
+  'veh_04',
+  'veh_05',
+  'veh_06',
+  'veh_07',
+  'veh_08',
+  'veh_09',
+  'veh_10',
+  'veh_11',
+  'veh_12',
+  'veh_13',
+  'veh_14',
+  'veh_15',
+]);
+const LEGACY_MOCK_PLATE_KEYS = new Set([
+  '61C12345',
+  '51D67890',
+  '60H01234',
+  '29C45678',
+  '51C88912',
+  '61H04567',
+  '50H23456',
+  '43C11289',
+  '60C55678',
+  '51G30219',
+  '61LD00845',
+  '29H77421',
+  '51C90433',
+  '60D11865',
+  '79C09240',
+]);
+const LEGACY_MOCK_LOG_IDS = new Set(['log_01', 'log_02', 'log_03', 'log_04']);
 const MAX_AUDIT_LOGS = 500;
 const SSE_TICKET_TTL_MS = 30_000;
 const MAX_SSE_TICKETS = 500;
@@ -255,6 +288,15 @@ function ensureDataDir(): void {
   }
 }
 
+function isLegacyMockOrderId(id: string): boolean {
+  return /^ord_26(06|07|08|09|10|11)_\d{2}$/.test(id);
+}
+
+function isLegacyMockVehicle(v: VehicleRecord): boolean {
+  const key = v.plate_key || normalizePlateKey(v.plate);
+  return LEGACY_MOCK_VEHICLE_IDS.has(v.id) || LEGACY_MOCK_PLATE_KEYS.has(key);
+}
+
 function loadStateFromDisk(): SharedFleetState | null {
   try {
     if (!fs.existsSync(DB_FILE_PATH)) return null;
@@ -267,17 +309,36 @@ function loadStateFromDisk(): SharedFleetState | null {
     ) {
       return null;
     }
-    return {
+
+    const rawVehicles = parsed.vehicles as VehicleRecord[];
+    const rawOrders = parsed.orders as OrderRecord[];
+    const rawItems = parsed.items as ItemRecord[];
+    const rawLogs = Array.isArray(parsed.auditLogs)
+      ? (parsed.auditLogs as AuditLogRecord[])
+      : [];
+
+    const removedVehicleIds = new Set(
+      rawVehicles.filter((v) => isLegacyMockVehicle(v)).map((v) => v.id)
+    );
+    const cleanedVehicles = rawVehicles.filter((v) => !isLegacyMockVehicle(v));
+    const cleanedOrders = rawOrders.filter(
+      (o) => !removedVehicleIds.has(o.vehicle_id) && !isLegacyMockOrderId(o.id)
+    );
+    const keptOrderIds = new Set(cleanedOrders.map((o) => o.id));
+    const cleanedItems = rawItems.filter((it) => keptOrderIds.has(it.order_id));
+    const cleanedLogs = rawLogs
+      .filter((l) => !LEGACY_MOCK_LOG_IDS.has(l.id))
+      .slice(0, MAX_AUDIT_LOGS);
+
+    const state: SharedFleetState = {
       version:
         typeof parsed.version === 'number' && parsed.version >= 1
           ? Math.floor(parsed.version)
           : 1,
-      vehicles: parsed.vehicles as VehicleRecord[],
-      orders: parsed.orders as OrderRecord[],
-      items: parsed.items as ItemRecord[],
-      auditLogs: Array.isArray(parsed.auditLogs)
-        ? (parsed.auditLogs as AuditLogRecord[]).slice(0, MAX_AUDIT_LOGS)
-        : [],
+      vehicles: cleanedVehicles,
+      orders: cleanedOrders,
+      items: cleanedItems,
+      auditLogs: cleanedLogs,
       monthlyBudget:
         typeof parsed.monthlyBudget === 'number' &&
         Number.isFinite(parsed.monthlyBudget) &&
@@ -300,6 +361,19 @@ function loadStateFromDisk(): SharedFleetState | null {
           ? parsed.lastUpdated
           : new Date().toISOString(),
     };
+
+    if (
+      cleanedVehicles.length !== rawVehicles.length ||
+      cleanedOrders.length !== rawOrders.length ||
+      cleanedItems.length !== rawItems.length ||
+      cleanedLogs.length !== rawLogs.length
+    ) {
+      state.version += 1;
+      state.lastUpdated = new Date().toISOString();
+      persistStateToDisk(state);
+    }
+
+    return state;
   } catch (err) {
     console.error('[fleet-db] Failed to load state from disk:', err);
     return null;
@@ -577,11 +651,12 @@ app.post('/api/fleet/bootstrap', requireAuth, (req: AuthedRequest, res: Response
   for (const rawVeh of body.vehicles) {
     if (!rawVeh || typeof rawVeh !== 'object') continue;
     const v = sanitizeVehicle(rawVeh as Record<string, unknown>);
-    if (!v || seenPlateKeys.has(v.plate_key)) continue;
+    if (!v || seenPlateKeys.has(v.plate_key) || isLegacyMockVehicle(v)) continue;
     seenPlateKeys.add(v.plate_key);
     vehicles.push(v);
   }
 
+  const keptVehicleIds = new Set(vehicles.map((v) => v.id));
   const orders: OrderRecord[] = [];
   const seenOrderIds = new Set<string>();
   for (const rawOrd of body.orders) {
@@ -590,7 +665,15 @@ app.post('/api/fleet/bootstrap', requireAuth, (req: AuthedRequest, res: Response
     const id = sanitizeClientId(o.id, 'ord') || generateId('ord');
     const vehicleId = safeString(o.vehicle_id, 64);
     const serviceDate = safeString(o.service_date, 20);
-    if (!vehicleId || !serviceDate || seenOrderIds.has(id)) continue;
+    if (
+      !vehicleId ||
+      !serviceDate ||
+      seenOrderIds.has(id) ||
+      isLegacyMockOrderId(id) ||
+      !keptVehicleIds.has(vehicleId)
+    ) {
+      continue;
+    }
     seenOrderIds.add(id);
     orders.push({
       id,
@@ -615,7 +698,7 @@ app.post('/api/fleet/bootstrap', requireAuth, (req: AuthedRequest, res: Response
     if (!rawIt || typeof rawIt !== 'object') continue;
     const it = rawIt as Record<string, unknown>;
     const orderId = safeString(it.order_id, 64);
-    if (!orderId) continue;
+    if (!orderId || !seenOrderIds.has(orderId)) continue;
     const clean = sanitizeItem(it, orderId, true);
     if (clean) items.push(clean);
   }
@@ -623,6 +706,7 @@ app.post('/api/fleet/bootstrap', requireAuth, (req: AuthedRequest, res: Response
   const auditLogs: AuditLogRecord[] = Array.isArray(body.auditLogs)
     ? body.auditLogs
         .filter((l): l is Record<string, unknown> => Boolean(l && typeof l === 'object'))
+        .filter((l) => !LEGACY_MOCK_LOG_IDS.has(String(l.id || '')))
         .slice(0, MAX_AUDIT_LOGS)
         .map((l) => ({
           id: sanitizeClientId(l.id, 'log') || generateId('log'),

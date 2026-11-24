@@ -9,7 +9,15 @@ import {
   Vehicle,
   VehicleType,
 } from '../types';
-import { buildSeedDataset, REFERENCE_TODAY, SEED_VEHICLES } from '../data/seedData';
+import {
+  buildSeedDataset,
+  isLegacyMockOrderId,
+  LEGACY_MOCK_LOG_IDS,
+  LEGACY_MOCK_PLATE_KEYS,
+  LEGACY_MOCK_VEHICLE_IDS,
+  REFERENCE_TODAY,
+  SEED_VEHICLES,
+} from '../data/seedData';
 import { addDaysISO, formatVND, generateId } from '../utils/format';
 import { formatVietnamesePlate, normalizePlateKey } from '../utils/plate';
 import { ParsedImportRow } from '../utils/excel';
@@ -22,24 +30,27 @@ const BUDGET_STORAGE_KEY = 'fleet_maintenance_v1_monthly_budget';
 const ADMIN_VISIBILITY_KEY = 'fleet_maintenance_v1_admin_visibility';
 const DEFAULT_MONTHLY_BUDGET = 320_000_000;
 
+function isLegacyMockVehicle(v: Pick<Vehicle, 'id' | 'plate_key' | 'plate'>): boolean {
+  const key = v.plate_key || normalizePlateKey(v.plate);
+  return LEGACY_MOCK_VEHICLE_IDS.has(v.id) || LEGACY_MOCK_PLATE_KEYS.has(key);
+}
+
 export function readStoredVehicles(): Vehicle[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<FleetDatabaseState>;
       if (Array.isArray(parsed.vehicles)) {
-        return parsed.vehicles;
+        return parsed.vehicles.filter((v) => !isLegacyMockVehicle(v));
       }
     }
   } catch {
-    // Fallback to seed vehicles
+    // Fallback to empty seed vehicles
   }
   return SEED_VEHICLES;
 }
 
 const DEFAULT_DASHBOARD_BLOCK_ORDER: DashboardBlockId[] = [
-  'summary',
-  'budget_heatmap',
   'monthly_status',
   'alerts',
   'charts',
@@ -76,7 +87,6 @@ interface UseFleetStoreOptions {
 }
 
 function loadInitialState(): FleetDatabaseState {
-  const seedRegMap = new Map(SEED_VEHICLES.map((v) => [v.plate_key, v.registration_due_date]));
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -86,23 +96,37 @@ function loadInitialState(): FleetDatabaseState {
         Array.isArray(parsed.orders) &&
         Array.isArray(parsed.items)
       ) {
-        const migratedVehicles = parsed.vehicles.map((v) => ({
-          ...v,
-          registration_due_date:
-            v.registration_due_date ||
-            seedRegMap.get(v.plate_key) ||
-            addDaysISO(REFERENCE_TODAY, 180),
-        }));
+        const cleanedVehicles = parsed.vehicles
+          .filter((v) => !isLegacyMockVehicle(v))
+          .map((v) => ({
+            ...v,
+            registration_due_date:
+              v.registration_due_date || addDaysISO(REFERENCE_TODAY, 180),
+          }));
+
+        const removedVehicleIds = new Set(
+          parsed.vehicles.filter((v) => isLegacyMockVehicle(v)).map((v) => v.id)
+        );
+        const cleanedOrders = parsed.orders.filter(
+          (o) => !removedVehicleIds.has(o.vehicle_id) && !isLegacyMockOrderId(o.id)
+        );
+        const keptOrderIds = new Set(cleanedOrders.map((o) => o.id));
+        const cleanedItems = parsed.items.filter((it) => keptOrderIds.has(it.order_id));
+        const cleanedLogs = Array.isArray(parsed.auditLogs)
+          ? parsed.auditLogs.filter((l) => !LEGACY_MOCK_LOG_IDS.has(l.id))
+          : [];
+
         return {
-          ...parsed,
-          vehicles: migratedVehicles,
-          auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
+          vehicles: cleanedVehicles,
+          orders: cleanedOrders,
+          items: cleanedItems,
+          auditLogs: cleanedLogs,
           lastUpdated: parsed.lastUpdated || new Date().toISOString(),
         };
       }
     }
   } catch {
-    // Fallback to seed data
+    // Fallback to empty dataset
   }
   const seed = buildSeedDataset();
   return {
@@ -116,12 +140,19 @@ function loadRecentPlates(): string[] {
     const raw = localStorage.getItem(RECENT_PLATES_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed.slice(0, 5);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter(
+            (p): p is string =>
+              typeof p === 'string' && !LEGACY_MOCK_PLATE_KEYS.has(normalizePlateKey(p))
+          )
+          .slice(0, 5);
+      }
     }
   } catch {
     // ignore
   }
-  return ['61C-123.45', '51D-678.90', '60H-012.34'];
+  return [];
 }
 
 function loadMonthlyBudget(): number {
@@ -153,6 +184,12 @@ function normalizeBlockOrder(order?: unknown): DashboardBlockId[] {
   return result;
 }
 
+function normalizeHiddenBlocks(blocks?: unknown): DashboardBlockId[] {
+  const validSet = new Set<DashboardBlockId>(DEFAULT_DASHBOARD_BLOCK_ORDER);
+  if (!Array.isArray(blocks)) return [];
+  return blocks.filter((b): b is DashboardBlockId => validSet.has(b as DashboardBlockId));
+}
+
 function loadAdminVisibility(): AdminVisibilityConfig {
   try {
     const raw = localStorage.getItem(ADMIN_VISIBILITY_KEY);
@@ -161,9 +198,7 @@ function loadAdminVisibility(): AdminVisibilityConfig {
       return {
         isAdminMode: typeof parsed.isAdminMode === 'boolean' ? parsed.isAdminMode : true,
         hiddenReportTabs: Array.isArray(parsed.hiddenReportTabs) ? parsed.hiddenReportTabs : [],
-        hiddenDashboardBlocks: Array.isArray(parsed.hiddenDashboardBlocks)
-          ? parsed.hiddenDashboardBlocks
-          : [],
+        hiddenDashboardBlocks: normalizeHiddenBlocks(parsed.hiddenDashboardBlocks),
         dashboardBlockOrder: normalizeBlockOrder(parsed.dashboardBlockOrder),
       };
     }
@@ -285,9 +320,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
         hiddenReportTabs: Array.isArray(incoming.hiddenReportTabs)
           ? incoming.hiddenReportTabs
           : prev.hiddenReportTabs,
-        hiddenDashboardBlocks: Array.isArray(incoming.hiddenDashboardBlocks)
-          ? incoming.hiddenDashboardBlocks
-          : prev.hiddenDashboardBlocks,
+        hiddenDashboardBlocks: normalizeHiddenBlocks(incoming.hiddenDashboardBlocks),
         dashboardBlockOrder: normalizeBlockOrder(incoming.dashboardBlockOrder),
       }));
     },
@@ -1254,7 +1287,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
           actor: actorName,
           action: 'UPDATE',
           entity: 'system',
-          summary: 'Khôi phục dữ liệu mẫu ban đầu (15 xe, 55 phiếu)',
+          summary: 'Đặt lại dữ liệu đội xe trống (0 xe, 0 phiếu)',
         },
         ...seed.auditLogs,
       ],

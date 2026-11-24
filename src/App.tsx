@@ -1,8 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  AlertCircle,
-  AlertTriangle,
   ArrowDown,
   ArrowUp,
   CheckCircle2,
@@ -32,12 +30,10 @@ import { LoginLamp } from './components/LoginLamp';
 import {
   buildActionByCategory,
   buildCategoryBreakdown,
-  buildCostVarianceHeatmap,
   buildDailyTrendData,
   buildMonthlyVehicleStatus,
   buildPoBreakdown,
   buildSixMonthSeries,
-  buildSmartSummary,
   buildTopRecurringItems,
   buildTopVehicles,
   computePeriodMetrics,
@@ -47,7 +43,7 @@ import {
   resolvePreviousRange,
 } from './utils/analytics';
 import { exportReportToExcel } from './utils/excel';
-import { daysBetween, formatDateTimeVN } from './utils/format';
+import { formatDateTimeVN } from './utils/format';
 import { GlobalFilterBar } from './components/GlobalFilterBar';
 import { ComparisonOverview } from './components/ComparisonOverview';
 import { PriorityAlertsPanel } from './components/PriorityAlertsPanel';
@@ -89,10 +85,11 @@ const NAV_ITEMS: Array<{
   { id: 'settings', label: 'Cài đặt & Nhật ký', shortLabel: 'Cài đặt', icon: Settings },
 ];
 
+const COMPANY_LOGO_SRC =
+  '/assets/aistudio/23-logo-thai-viet-corporation-removebg-preview__1__370dbc13.png';
+
 const DASHBOARD_BLOCK_LABELS: Record<DashboardBlockId, string> = {
-  summary: 'Tóm tắt điều hành',
-  budget_heatmap: 'Ngân sách & Biểu đồ nhiệt',
-  monthly_status: 'Xe đã/chưa bảo dưỡng kỳ này',
+  monthly_status: 'Thông tin bảo dưỡng trong tháng ( đến hiện tại )',
   alerts: 'Góc Cảnh Báo Khẩn',
   charts: 'Biểu đồ phân tích chi tiết',
   orders_table: 'Bảng chi tiết phiếu bảo dưỡng',
@@ -316,19 +313,6 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     [currentFiltered.orders, prevFiltered.orders]
   );
 
-  const effectiveBudget = useMemo(() => {
-    if (filters.periodPreset === 'month') return store.monthlyBudget;
-    if (filters.periodPreset === 'quarter') return store.monthlyBudget * 3;
-    if (filters.periodPreset === 'year') return store.monthlyBudget * 12;
-    const spanDays = Math.max(1, daysBetween(currentRange.start, currentRange.end) + 1);
-    return Math.round((store.monthlyBudget * spanDays) / 30);
-  }, [filters.periodPreset, store.monthlyBudget, currentRange]);
-
-  const heatmapData = useMemo(
-    () => buildCostVarianceHeatmap(store.vehicles, store.orders, store.items, filters),
-    [store.vehicles, store.orders, store.items, filters]
-  );
-
   const vehicleStatuses = useMemo(
     () =>
       buildMonthlyVehicleStatus(
@@ -353,19 +337,6 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   const actionByCategory = useMemo(
     () => buildActionByCategory(currentFiltered.items),
     [currentFiltered.items]
-  );
-
-  const smartSummary = useMemo(
-    () =>
-      buildSmartSummary(
-        currentRange.label,
-        prevRange.label,
-        currentMetrics,
-        prevMetrics,
-        topVehicles[0] ?? null,
-        alerts
-      ),
-    [currentRange.label, prevRange.label, currentMetrics, prevMetrics, topVehicles, alerts]
   );
 
   // ==================== HANDLERS ====================
@@ -413,33 +384,12 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     window.print();
   };
 
-  const summaryBadgeStyle =
-    smartSummary.level === 'action'
-      ? {
-          wrap: 'border-red-300/75 bg-linear-to-r from-red-50/75 via-white/55 to-white/45 text-red-950',
-          badge: 'bg-red-600/90 text-white shadow-sm shadow-red-600/25',
-          icon: <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />,
-        }
-      : smartSummary.level === 'attention'
-      ? {
-          wrap: 'border-amber-300/75 bg-linear-to-r from-amber-50/75 via-white/55 to-white/45 text-amber-950',
-          badge: 'bg-amber-600/90 text-white shadow-sm shadow-amber-600/25',
-          icon: <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />,
-        }
-      : {
-          wrap: 'border-emerald-300/75 bg-linear-to-r from-emerald-50/70 via-white/55 to-white/45 text-emerald-950',
-          badge: 'bg-emerald-600/90 text-white shadow-sm shadow-emerald-600/25',
-          icon: <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />,
-        };
-
   const urgentVehicleAlertCount = alerts.filter((a) => a.category === 'registration').length;
 
   const isBlockHidden = (block: DashboardBlockId) =>
     store.hiddenDashboardBlocks.includes(block);
 
   const defaultBlockOrder: DashboardBlockId[] = [
-    'summary',
-    'budget_heatmap',
     'monthly_status',
     'alerts',
     'charts',
@@ -520,10 +470,14 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         <div className="sticky top-3 h-[calc(100dvh-1.5rem)] glass-panel-strong rounded-2xl py-3 px-2 flex flex-col items-center justify-between">
           <div className="flex flex-col items-center gap-3 w-full">
             <div
-              className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-sm shrink-0"
+              className="w-10 h-10 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden"
               title="THAI VIET CORPORATION"
             >
-              <Truck className="w-5 h-5" />
+              <img
+                src={COMPANY_LOGO_SRC}
+                alt="THAI VIET CORPORATION"
+                className="w-full h-full object-contain"
+              />
             </div>
 
             <button
@@ -607,8 +561,12 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
           <div className="space-y-6">
             {/* Brand */}
             <div className="px-0.5 pt-1 flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-sm shrink-0">
-                <Truck className="w-5 h-5" />
+              <div className="w-10 h-10 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden">
+                <img
+                  src={COMPANY_LOGO_SRC}
+                  alt="THAI VIET CORPORATION"
+                  className="w-full h-full object-contain"
+                />
               </div>
               <div className="min-w-0 flex-1">
                 <div
@@ -822,8 +780,12 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               <div className="space-y-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
-                      <Truck className="w-4.5 h-4.5" />
+                    <div className="w-10 h-10 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden">
+                      <img
+                        src={COMPANY_LOGO_SRC}
+                        alt="THAI VIET CORPORATION"
+                        className="w-full h-full object-contain"
+                      />
                     </div>
                     <div className="min-w-0">
                       <div className="font-extrabold text-[11px] tracking-[-0.02em] text-slate-900 leading-tight whitespace-nowrap">
@@ -1004,15 +966,19 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
           {/* Mobile Compact Top Strip (< 640px) */}
           <div className="flex sm:hidden items-center justify-between gap-2 relative">
             <div className="flex items-center gap-2 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-sm shrink-0">
-                <Truck className="w-4.5 h-4.5" />
+              <div className="w-9 h-9 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden">
+                <img
+                  src={COMPANY_LOGO_SRC}
+                  alt="THAI VIET CORPORATION"
+                  className="w-full h-full object-contain"
+                />
               </div>
               <div className="min-w-0">
                 <div className="text-[11px] font-extrabold tracking-[-0.02em] text-slate-900 leading-tight">
                   THAI VIET CORPORATION
                 </div>
                 <div className="text-[11px] font-medium text-slate-600 leading-tight">
-                  {activePage === 'dashboard' && 'Tổng quan bảo dưỡng'}
+                  {activePage === 'dashboard' && 'BÁO CÁO BẢO DƯỠNG ĐỘI XE'}
                   {activePage === 'orders' && 'Phiếu bảo dưỡng'}
                   {activePage === 'vehicles' && (selectedVehicleId ? 'Hồ sơ phương tiện' : 'Đội xe & Hồ sơ')}
                   {activePage === 'po' && 'Theo dõi chi phí PO'}
@@ -1168,7 +1134,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 <Menu className="w-5 h-5" />
               </button>
               <h1 className="fluid-page-title font-extrabold tracking-tight text-slate-900 break-words">
-                {activePage === 'dashboard' && 'Báo cáo bảo dưỡng đội xe'}
+                {activePage === 'dashboard' && 'BÁO CÁO BẢO DƯỠNG ĐỘI XE'}
                 {activePage === 'orders' && 'Danh sách phiếu bảo dưỡng'}
                 {activePage === 'vehicles' &&
                   (selectedVehicleId ? 'Hồ sơ chi tiết phương tiện' : 'Quản lý đội xe & Hạn bảo dưỡng')}
@@ -1214,7 +1180,6 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               Xuất lúc: {formatDateTimeVN(store.lastUpdated)}
             </span>
           </div>
-          <p className="text-xs text-slate-700 mt-1">{smartSummary.text}</p>
         </div>
 
         {/* Main Viewport */}
@@ -1432,87 +1397,14 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     // Visible block wrapped as drop target for dragged hidden blocks
                     let content: React.ReactNode = null;
 
-                    if (blockId === 'summary') {
-                      content = (
-                        <section
-                          aria-label="Tóm tắt điều hành"
-                          className={`glass-panel rounded-2xl px-4 sm:px-5 py-3.5 border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${summaryBadgeStyle.wrap}`}
-                        >
-                          <div className="flex items-start sm:items-center gap-3 min-w-0">
-                            {summaryBadgeStyle.icon}
-                            <p className="text-xs sm:text-sm font-semibold leading-relaxed text-slate-900">
-                              {smartSummary.text}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
-                            <span
-                              className={`inline-flex items-center justify-center px-3 py-1 rounded-lg text-xs font-bold whitespace-nowrap ${summaryBadgeStyle.badge}`}
-                            >
-                              {smartSummary.levelLabel}
-                            </span>
-                            {effectiveAdminMode && (
-                              <button
-                                type="button"
-                                onClick={() => store.toggleDashboardBlockVisibility('summary')}
-                                title="Quyền Admin: Ẩn dòng tóm tắt"
-                                className="p-1.5 rounded-lg bg-white/60 hover:bg-white text-slate-500 hover:text-red-700 transition-colors no-print"
-                              >
-                                <EyeOff className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </section>
-                      );
-                    } else if (blockId === 'budget_heatmap') {
+                    if (blockId === 'monthly_status') {
                       content = (
                         <ComparisonOverview
-                          current={currentMetrics}
-                          previous={prevMetrics}
-                          periodBudget={effectiveBudget}
-                          monthlyBudget={store.monthlyBudget}
-                          isMonthPreset={filters.periodPreset === 'month'}
-                          onUpdateMonthlyBudget={(val) => {
-                            store.setMonthlyBudget(val);
-                            showToast('Đã cập nhật ngân sách bảo dưỡng hàng tháng.');
-                          }}
                           periodLabel={currentRange.label}
                           prevLabel={prevRange.label}
-                          heatmap={heatmapData}
                           vehicleStatuses={vehicleStatuses}
-                          activeFilters={filters}
-                          onFilterChange={updateFilters}
-                          onFilterMissingPo={() => updateFilters({ poNumber: '__MISSING__' })}
                           onOpenVehicle={openVehicleProfile}
                           onOpenNewOrderForVehicle={(vid) => openNewOrder(vid)}
-                          hideBudgetHeatmap={false}
-                          hideMonthlyStatus={true}
-                          isAdminMode={effectiveAdminMode}
-                          onToggleBlock={store.toggleDashboardBlockVisibility}
-                        />
-                      );
-                    } else if (blockId === 'monthly_status') {
-                      content = (
-                        <ComparisonOverview
-                          current={currentMetrics}
-                          previous={prevMetrics}
-                          periodBudget={effectiveBudget}
-                          monthlyBudget={store.monthlyBudget}
-                          isMonthPreset={filters.periodPreset === 'month'}
-                          onUpdateMonthlyBudget={(val) => {
-                            store.setMonthlyBudget(val);
-                            showToast('Đã cập nhật ngân sách bảo dưỡng hàng tháng.');
-                          }}
-                          periodLabel={currentRange.label}
-                          prevLabel={prevRange.label}
-                          heatmap={heatmapData}
-                          vehicleStatuses={vehicleStatuses}
-                          activeFilters={filters}
-                          onFilterChange={updateFilters}
-                          onFilterMissingPo={() => updateFilters({ poNumber: '__MISSING__' })}
-                          onOpenVehicle={openVehicleProfile}
-                          onOpenNewOrderForVehicle={(vid) => openNewOrder(vid)}
-                          hideBudgetHeatmap={true}
-                          hideMonthlyStatus={false}
                           isAdminMode={effectiveAdminMode}
                           onToggleBlock={store.toggleDashboardBlockVisibility}
                         />
