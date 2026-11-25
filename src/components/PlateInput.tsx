@@ -17,8 +17,7 @@ import {
   normalizePlateKey,
   splitPlateLines,
 } from '../utils/plate';
-import { addDaysISO, formatKm } from '../utils/format';
-import { REFERENCE_TODAY } from '../data/seedData';
+import { addDaysISO, formatKm, REFERENCE_TODAY } from '../utils/format';
 import {
   buildDepartmentOptions,
   CUSTOM_DEPARTMENT_VALUE,
@@ -95,7 +94,7 @@ export const PlateInput: React.FC<PlateInputProps> = ({
   onChange,
   onSelectVehicle,
   onQuickCreateVehicle,
-  placeholder = 'VD: 61C-123.45 hoặc 51c12345',
+  placeholder = 'VD: 51A-000.00 hoặc 51a00000',
   showPlatePreview = true,
   allowQuickCreate = false,
   allowCustomFormatOverride = true,
@@ -338,7 +337,7 @@ export const PlateInput: React.FC<PlateInputProps> = ({
         <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-red-600">
           <span className="inline-flex items-center gap-1 font-medium">
             <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-            Biển số chưa đúng định dạng chuẩn (VD: 51C-123.45)
+            Biển số chưa đúng định dạng chuẩn (VD: 51A-000.00)
           </span>
           {allowCustomFormatOverride && (
             <button

@@ -6,16 +6,13 @@ import {
   CalendarClock,
   CheckCircle2,
   Edit3,
-  Eye,
-  EyeOff,
   Loader2,
   Plus,
   Save,
   ShieldAlert,
-  UserPlus,
+  Trash2,
   X,
 } from 'lucide-react';
-import { supabase } from '../lib/supabaseClient';
 import {
   Bar,
   BarChart,
@@ -34,7 +31,6 @@ import {
   Vehicle,
   VehicleStatus,
 } from '../types';
-import { REFERENCE_TODAY } from '../data/seedData';
 import {
   addDaysISO,
   daysBetween,
@@ -43,6 +39,7 @@ import {
   formatKm,
   formatShortMonth,
   formatVND,
+  REFERENCE_TODAY,
 } from '../utils/format';
 import { PlateInput, VietnamesePlateBadge } from './PlateInput';
 import { OrdersTable } from './OrdersTable';
@@ -53,14 +50,11 @@ import {
 } from '../utils/departments';
 import { DepartmentSelectField } from './DepartmentSelectField';
 import {
-  extractFunctionError,
   fetchAllMemberProfiles,
   filterMembersByPlate,
-  invokeAdminUsers,
   MemberProfileRow,
 } from '../utils/memberActions';
 import {
-  CreateMemberModal,
   DeleteMemberModal,
   ResetPasswordModal,
   TransferMemberModal,
@@ -85,6 +79,7 @@ interface VehiclesViewProps {
     updates: Partial<Omit<Vehicle, 'id' | 'plate_key'>>,
     opts?: { silent?: boolean }
   ) => { ok: boolean; error?: string };
+  onDeleteVehicle?: (vehicleId: string) => Promise<{ ok: boolean; error?: string }>;
   onOpenNewOrderForVehicle: (vehicleId: string) => void;
   onEditOrder: (order: EnrichedOrder) => void;
   onDeleteOrder: (orderId: string) => void;
@@ -137,6 +132,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
   onSelectVehicle,
   onAddVehicle,
   onUpdateVehicle,
+  onDeleteVehicle,
   onOpenNewOrderForVehicle,
   onEditOrder,
   onDeleteOrder,
@@ -147,13 +143,15 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
   const [searchPlate, setSearchPlate] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
+  const [confirmDeleteVehicleId, setConfirmDeleteVehicleId] = useState<string | null>(null);
+  const [deletingVehicle, setDeletingVehicle] = useState(false);
 
-  // Streamlined Vehicle Modal form state (no year, current_km, interval_km, next_km, next_date; adds registration_due_date + custom type)
+  // Streamlined Vehicle Modal form state
   const [fPlate, setFPlate] = useState('');
   const [fTypePreset, setFTypePreset] = useState<string>(VEHICLE_TYPE_PRESETS[0]);
   const [fCustomType, setFCustomType] = useState('');
   const [fBrand, setFBrand] = useState('');
-  const [fDriver, setFDriver] = useState('');
+  const [fDriverId, setFDriverId] = useState('');
   const [fDept, setFDept] = useState('');
   const [fCustomDept, setFCustomDept] = useState('');
   const [fDeptError, setFDeptError] = useState('');
@@ -161,21 +159,10 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
   const [fRegDueDate, setFRegDueDate] = useState(addDaysISO(REFERENCE_TODAY, 180));
   const [fError, setFError] = useState('');
 
-  // Admin-only optional member account creation state (inside Add Vehicle modal)
-  const [memberUsername, setMemberUsername] = useState('');
-  const [memberPassword, setMemberPassword] = useState('');
-  const [memberConfirmPassword, setMemberConfirmPassword] = useState('');
-  const [showMemberPwd, setShowMemberPwd] = useState(false);
-  const [showMemberConfirmPwd, setShowMemberConfirmPwd] = useState(false);
-  const [isCreatingMember, setIsCreatingMember] = useState(false);
-  const [memberError, setMemberError] = useState('');
-  const [createdVehicleForRetry, setCreatedVehicleForRetry] = useState<Vehicle | null>(null);
-
-  // Admin-only Group B: existing member profiles & action modals
+  // Admin-only existing member profiles & action modals
   const [allMembers, setAllMembers] = useState<MemberProfileRow[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersError, setMembersError] = useState<string | null>(null);
-  const [createMemberForVehicle, setCreateMemberForVehicle] = useState<Vehicle | null>(null);
   const [transferMemberTarget, setTransferMemberTarget] = useState<MemberProfileRow | null>(null);
   const [resetPwdMemberTarget, setResetPwdMemberTarget] = useState<MemberProfileRow | null>(null);
   const [deleteMemberTarget, setDeleteMemberTarget] = useState<MemberProfileRow | null>(null);
@@ -195,13 +182,13 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
     setMembersLoading(false);
   }, [isAdmin]);
 
-  // Fetch member profiles only for Admin when viewing a vehicle detail or editing a vehicle
+  // Fetch member profiles for Admin when viewing a vehicle detail, editing, or opening Add Vehicle modal
   useEffect(() => {
     if (!isAdmin) return;
-    if (selectedVehicleId || editingVehicle) {
+    if (selectedVehicleId || editingVehicle || showModal) {
       refreshMembers();
     }
-  }, [isAdmin, selectedVehicleId, editingVehicle, refreshMembers]);
+  }, [isAdmin, selectedVehicleId, editingVehicle, showModal, refreshMembers]);
 
   const itemsByOrder = useMemo(() => {
     const m = new Map<string, MaintenanceItem[]>();
@@ -230,17 +217,6 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
     return map;
   }, [allOrders, itemsByOrder]);
 
-  const resetMemberAccountState = () => {
-    setMemberUsername('');
-    setMemberPassword('');
-    setMemberConfirmPassword('');
-    setShowMemberPwd(false);
-    setShowMemberConfirmPwd(false);
-    setIsCreatingMember(false);
-    setMemberError('');
-    setCreatedVehicleForRetry(null);
-  };
-
   const openCreateModal = () => {
     if (!isAdmin) return;
     setEditingVehicle(null);
@@ -248,14 +224,14 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
     setFTypePreset(VEHICLE_TYPE_PRESETS[0]);
     setFCustomType('');
     setFBrand('');
-    setFDriver('');
+    setFDriverId('');
     setFDept('');
     setFCustomDept('');
     setFDeptError('');
     setFStatus('Đang hoạt động');
     setFRegDueDate(addDaysISO(REFERENCE_TODAY, 180));
     setFError('');
-    resetMemberAccountState();
+    setConfirmDeleteVehicleId(null);
     setShowModal(true);
   };
 
@@ -271,14 +247,14 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
       setFCustomType(v.type);
     }
     setFBrand(v.brand_model);
-    setFDriver(v.driver_name);
+    setFDriverId(v.driver_id || '');
     setFDept(v.department || '');
     setFCustomDept('');
     setFDeptError('');
     setFStatus(v.status);
     setFRegDueDate(v.registration_due_date || addDaysISO(REFERENCE_TODAY, 180));
     setFError('');
-    resetMemberAccountState();
+    setConfirmDeleteVehicleId(null);
     setShowModal(true);
   };
 
@@ -302,37 +278,44 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
     return { ok: true, value: fDept.trim() };
   };
 
-  const handleSaveVehicle = async (e: React.FormEvent) => {
+  const handleSaveVehicle = (e: React.FormEvent) => {
     e.preventDefault();
-    if (isCreatingMember) return;
     setFError('');
     setFDeptError('');
-    setMemberError('');
 
-    // Edit existing vehicle flow (Admin only)
+    if (!isAdmin) {
+      setFError('Chỉ Admin mới có quyền quản lý thông tin xe.');
+      return;
+    }
+
+    const resolvedType =
+      fTypePreset === CUSTOM_TYPE_VALUE ? fCustomType.trim() : fTypePreset;
+    if (!resolvedType) {
+      setFError('Vui lòng nhập loại xe tự điền.');
+      return;
+    }
+    const deptRes = resolveFormDepartment();
+    if (!deptRes.ok) return;
+    if (!fRegDueDate) {
+      setFError('Vui lòng chọn ngày hạn cuối đăng kiểm.');
+      return;
+    }
+
+    const selectedMember = fDriverId
+      ? allMembers.find((m) => m.id === fDriverId) ?? null
+      : null;
+    const resolvedDriverId = selectedMember ? selectedMember.id : null;
+    const resolvedDriverName = selectedMember
+      ? selectedMember.full_name?.trim() || selectedMember.username
+      : 'Chưa phân công';
+
     if (editingVehicle) {
-      if (!isAdmin) {
-        setFError('Chỉ Admin mới có quyền cập nhật thông tin xe.');
-        return;
-      }
-      const resolvedType =
-        fTypePreset === CUSTOM_TYPE_VALUE ? fCustomType.trim() : fTypePreset;
-      if (!resolvedType) {
-        setFError('Vui lòng nhập loại xe tự điền.');
-        return;
-      }
-      const deptRes = resolveFormDepartment();
-      if (!deptRes.ok) return;
-      if (!fRegDueDate) {
-        setFError('Vui lòng chọn ngày hạn cuối đăng kiểm.');
-        return;
-      }
-
       const res = onUpdateVehicle(editingVehicle.id, {
         plate: fPlate,
         type: resolvedType,
         brand_model: fBrand.trim() || 'Chưa cập nhật',
-        driver_name: fDriver.trim() || 'Chưa phân công',
+        driver_id: resolvedDriverId,
+        driver_name: resolvedDriverName,
         department: deptRes.value,
         status: fStatus,
         registration_due_date: fRegDueDate,
@@ -345,111 +328,49 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
       return;
     }
 
-    // Create new vehicle (+ optional Admin member account) — strictly Admin only
-    if (!isAdmin) {
-      setFError('Chỉ Admin mới có quyền thêm xe mới.');
+    const payload: Omit<Vehicle, 'id' | 'plate_key'> = {
+      plate: fPlate,
+      type: resolvedType,
+      brand_model: fBrand.trim() || 'Chưa cập nhật',
+      driver_id: resolvedDriverId,
+      driver_name: resolvedDriverName,
+      department: deptRes.value,
+      status: fStatus,
+      registration_due_date: fRegDueDate,
+      current_km: 0,
+      service_interval_km: 10000,
+      service_interval_days: 90,
+      next_service_km: 0,
+      next_service_date: '',
+    };
+
+    const res = onAddVehicle(payload);
+    if (!res.ok) {
+      setFError(res.error);
       return;
     }
+    setShowModal(false);
+  };
 
-    const rawId = memberUsername.trim();
-    const wantsMemberAccount =
-      isAdmin &&
-      (Boolean(createdVehicleForRetry) ||
-        Boolean(rawId || memberPassword || memberConfirmPassword));
-
-    // Validate optional member account fields BEFORE adding vehicle
-    if (wantsMemberAccount) {
-      if (!/^[a-z0-9._-]{3,30}$/.test(rawId)) {
-        setMemberError(
-          'ID đăng nhập phải từ 3–30 ký tự, chỉ gồm chữ thường (a-z), số (0-9) và dấu . _ -'
-        );
-        return;
-      }
-      if (memberPassword.length < 8) {
-        setMemberError('Mật khẩu phải có tối thiểu 8 ký tự.');
-        return;
-      }
-      if (memberPassword !== memberConfirmPassword) {
-        setMemberError('Nhập lại mật khẩu chưa khớp với mật khẩu.');
-        return;
-      }
-    }
-
-    // Step 1: Add vehicle first (skip if vehicle was already added on previous retry)
-    let addedVehicle = createdVehicleForRetry;
-    if (!addedVehicle) {
-      const resolvedType =
-        fTypePreset === CUSTOM_TYPE_VALUE ? fCustomType.trim() : fTypePreset;
-      if (!resolvedType) {
-        setFError('Vui lòng nhập loại xe tự điền.');
-        return;
-      }
-      const deptRes = resolveFormDepartment();
-      if (!deptRes.ok) return;
-      if (!fRegDueDate) {
-        setFError('Vui lòng chọn ngày hạn cuối đăng kiểm.');
-        return;
-      }
-
-      const payload: Omit<Vehicle, 'id' | 'plate_key'> = {
-        plate: fPlate,
-        type: resolvedType,
-        brand_model: fBrand.trim() || 'Chưa cập nhật',
-        driver_name: fDriver.trim() || 'Chưa phân công',
-        department: deptRes.value,
-        status: fStatus,
-        registration_due_date: fRegDueDate,
-        current_km: 0,
-        service_interval_km: 10000,
-        service_interval_days: 90,
-        next_service_km: 0,
-        next_service_date: '',
-      };
-
-      const res = onAddVehicle(payload, { silent: wantsMemberAccount });
-      if (!res.ok) {
-        setFError(res.error);
-        return;
-      }
-      addedVehicle = res.vehicle;
-    }
-
-    // If no member account requested, finish immediately
-    if (!wantsMemberAccount) {
-      setShowModal(false);
+  const handleConfirmDeleteVehicle = async (vehicle: Vehicle) => {
+    if (!isAdmin || !onDeleteVehicle || deletingVehicle) return;
+    if (confirmDeleteVehicleId !== vehicle.id) {
+      setConfirmDeleteVehicleId(vehicle.id);
       return;
     }
-
-    // Step 2: Invoke Supabase Edge Function `create-member`
-    setIsCreatingMember(true);
-    try {
-      const { data, error } = await invokeAdminUsers({
-        action: 'create',
-        username: rawId,
-        password: memberPassword,
-        full_name: addedVehicle.driver_name,
-        vehicle_id: addedVehicle.id,
-      });
-
-      if (error || (data && typeof data === 'object' && 'error' in data && data.error)) {
-        const serverErrorMsg = await extractFunctionError(error, data);
-        // Preserve already-added vehicle so retry does NOT duplicate the vehicle
-        setCreatedVehicleForRetry(addedVehicle);
-        setMemberError(`Xe đã thêm, nhưng tạo tài khoản thất bại: ${serverErrorMsg}`);
-        setIsCreatingMember(false);
-        return;
-      }
-
-      // Both vehicle and member account succeeded
-      resetMemberAccountState();
-      setShowModal(false);
-      onNotify?.(`Đã thêm xe và tạo tài khoản thành viên ${rawId}`);
-    } catch (err) {
-      const serverErrorMsg = await extractFunctionError(err);
-      setCreatedVehicleForRetry(addedVehicle);
-      setMemberError(`Xe đã thêm, nhưng tạo tài khoản thất bại: ${serverErrorMsg}`);
-      setIsCreatingMember(false);
+    setDeletingVehicle(true);
+    const res = await onDeleteVehicle(vehicle.id);
+    setDeletingVehicle(false);
+    if (!res.ok) {
+      setFError(res.error || 'Không thể xóa xe.');
+      return;
     }
+    setConfirmDeleteVehicleId(null);
+    setShowModal(false);
+    if (selectedVehicleId === vehicle.id) {
+      onSelectVehicle(null);
+    }
+    onNotify?.(`Đã xóa xe ${vehicle.plate} khỏi đội xe và Supabase.`);
   };
 
   // ==================== VEHICLE PROFILE VIEW ====================
@@ -523,14 +444,35 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
 
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             {isAdmin && (
-              <button
-                type="button"
-                onClick={() => openEditModal(activeVehicle)}
-                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl glass-input text-xs font-semibold text-slate-700 touch-press"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                Sửa thông tin xe
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => openEditModal(activeVehicle)}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl glass-input text-xs font-semibold text-slate-700 touch-press"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  Sửa thông tin xe
+                </button>
+                {onDeleteVehicle && (
+                  <button
+                    type="button"
+                    disabled={deletingVehicle}
+                    onClick={() => handleConfirmDeleteVehicle(activeVehicle)}
+                    className={`inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors touch-press ${
+                      confirmDeleteVehicleId === activeVehicle.id
+                        ? 'bg-red-600 hover:bg-red-700 text-white'
+                        : 'bg-red-50/90 hover:bg-red-100 text-red-700 border border-red-200'
+                    }`}
+                  >
+                    {deletingVehicle ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
+                    )}
+                    {confirmDeleteVehicleId === activeVehicle.id ? 'Xác nhận xóa xe' : 'Xóa xe'}
+                  </button>
+                )}
+              </>
             )}
             <button
               type="button"
@@ -617,7 +559,6 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
             members={filterMembersByPlate(allMembers, activeVehicle.plate)}
             loading={membersLoading}
             loadError={membersError}
-            onCreateClick={() => setCreateMemberForVehicle(activeVehicle)}
             onTransferClick={(m) => setTransferMemberTarget(m)}
             onResetPwdClick={(m) => setResetPwdMemberTarget(m)}
             onDeleteClick={(m) => setDeleteMemberTarget(m)}
@@ -825,13 +766,34 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Tài xế phụ trách
                 </label>
-                <input
-                  type="text"
-                  value={fDriver}
-                  onChange={(e) => setFDriver(e.target.value)}
-                  placeholder="Họ và tên tài xế"
-                  className="glass-input w-full h-10 px-3 rounded-xl text-xs"
-                />
+                <select
+                  value={fDriverId}
+                  onChange={(e) => setFDriverId(e.target.value)}
+                  className="glass-input w-full h-10 px-3 rounded-xl text-xs font-medium text-slate-900"
+                >
+                  <option value="">
+                    {membersLoading
+                      ? 'Đang tải danh sách tài xế...'
+                      : '-- Chọn tài xế phụ trách --'}
+                  </option>
+                  {allMembers.map((m) => {
+                    const displayFullName = m.full_name?.trim() || m.username;
+                    const assignedNote =
+                      m.vehicle_plate && m.vehicle_plate !== editingVehicle?.plate
+                        ? ` · đang gắn ${m.vehicle_plate}`
+                        : '';
+                    return (
+                      <option key={m.id} value={m.id}>
+                        {displayFullName} ({m.username}){assignedNote}
+                      </option>
+                    );
+                  })}
+                </select>
+                {!membersLoading && allMembers.length === 0 && (
+                  <p className="text-[11px] text-amber-700 mt-1">
+                    Chưa có tài khoản tài xế. Thêm tài khoản trong mục Cài đặt & Nhật ký để chọn tại đây.
+                  </p>
+                )}
               </div>
 
               <DepartmentSelectField
@@ -839,7 +801,6 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
                 selectedValue={fDept}
                 customValue={fCustomDept}
                 error={fDeptError}
-                disabled={isCreatingMember}
                 onSelectChange={(val) => {
                   setFDept(val);
                   if (val !== CUSTOM_DEPARTMENT_VALUE) setFCustomDept('');
@@ -906,123 +867,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
               </div>
             </div>
 
-            {/* Admin-only optional Member Account section when adding a new vehicle */}
-            {isAdmin && !editingVehicle && (
-              <div className="mt-2 p-4 rounded-2xl glass-tile border border-blue-200/75 bg-linear-to-br from-blue-50/55 via-white/55 to-sky-50/45 space-y-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
-                      <UserPlus className="w-4 h-4 text-blue-600 shrink-0" />
-                      Tài khoản thành viên (tùy chọn)
-                    </div>
-                    <p className="text-[11px] text-slate-600 mt-0.5">
-                      Để trống nếu chỉ muốn thêm xe. Nếu nhập, hệ thống sẽ tự tạo tài khoản đăng nhập cho tài xế xe này.
-                    </p>
-                  </div>
-                  {createdVehicleForRetry && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-100/90 border border-emerald-200 text-emerald-800 text-[10px] font-bold whitespace-nowrap shrink-0">
-                      <CheckCircle2 className="w-3 h-3 shrink-0" />
-                      Đã lưu xe {createdVehicleForRetry.plate}
-                    </span>
-                  )}
-                </div>
-
-                {memberError && (
-                  <div className="p-2.5 rounded-xl bg-red-50/90 border border-red-200 text-red-800 text-xs font-semibold flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                    <span>{memberError}</span>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                      ID đăng nhập
-                    </label>
-                    <input
-                      type="text"
-                      value={memberUsername}
-                      onChange={(e) => {
-                        setMemberUsername(e.target.value);
-                        if (memberError) setMemberError('');
-                      }}
-                      placeholder="vd: taixe_01"
-                      autoComplete="off"
-                      disabled={isCreatingMember}
-                      className="glass-input w-full h-10 px-3 rounded-xl text-xs font-mono text-slate-900"
-                    />
-                    <div className="text-[10px] text-slate-500 mt-1">
-                      3–30 ký tự: a-z, 0-9, dấu . _ -
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                      Mật khẩu
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showMemberPwd ? 'text' : 'password'}
-                        value={memberPassword}
-                        onChange={(e) => {
-                          setMemberPassword(e.target.value);
-                          if (memberError) setMemberError('');
-                        }}
-                        placeholder="Tối thiểu 8 ký tự"
-                        autoComplete="new-password"
-                        disabled={isCreatingMember}
-                        className="glass-input w-full h-10 pl-3 pr-9 rounded-xl text-xs text-slate-900"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowMemberPwd((p) => !p)}
-                        title={showMemberPwd ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
-                      >
-                        {showMemberPwd ? (
-                          <EyeOff className="w-3.5 h-3.5" />
-                        ) : (
-                          <Eye className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                      Nhập lại mật khẩu
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showMemberConfirmPwd ? 'text' : 'password'}
-                        value={memberConfirmPassword}
-                        onChange={(e) => {
-                          setMemberConfirmPassword(e.target.value);
-                          if (memberError) setMemberError('');
-                        }}
-                        placeholder="Nhập lại mật khẩu"
-                        autoComplete="new-password"
-                        disabled={isCreatingMember}
-                        className="glass-input w-full h-10 pl-3 pr-9 rounded-xl text-xs text-slate-900"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowMemberConfirmPwd((p) => !p)}
-                        title={showMemberConfirmPwd ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
-                      >
-                        {showMemberConfirmPwd ? (
-                          <EyeOff className="w-3.5 h-3.5" />
-                        ) : (
-                          <Eye className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-            {/* Admin-only Group B: Member accounts linked to this vehicle inside Edit Vehicle modal */}
+            {/* Admin-only linked member accounts inside Edit Vehicle modal */}
             {isAdmin && editingVehicle && (
               <VehicleMembersCard
                 vehicle={editingVehicle}
@@ -1030,7 +875,6 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
                 loading={membersLoading}
                 loadError={membersError}
                 compact
-                onCreateClick={() => setCreateMemberForVehicle(editingVehicle)}
                 onTransferClick={(m) => setTransferMemberTarget(m)}
                 onResetPwdClick={(m) => setResetPwdMemberTarget(m)}
                 onDeleteClick={(m) => setDeleteMemberTarget(m)}
@@ -1038,43 +882,50 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
             )}
           </div>
 
-          <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-white/75 bg-white/85 backdrop-blur-xl flex items-center justify-end gap-2 safe-bottom">
-            <button
-              type="button"
-              disabled={isCreatingMember}
-              onClick={() => {
-                if (createdVehicleForRetry) {
-                  onNotify?.(`Đã thêm xe ${createdVehicleForRetry.plate} vào đội xe.`);
-                }
-                resetMemberAccountState();
-                setShowModal(false);
-              }}
-              className="flex-1 sm:flex-initial min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100/90 sm:bg-transparent hover:bg-white/80 disabled:opacity-50"
-            >
-              {createdVehicleForRetry ? 'Đóng (giữ xe đã thêm)' : 'Hủy'}
-            </button>
-            <button
-              type="submit"
-              disabled={isCreatingMember}
-              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] px-5 py-2.5 rounded-xl glass-button-primary text-white text-xs font-bold disabled:opacity-65"
-            >
-              {isCreatingMember ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Đang tạo tài khoản...
-                </>
-              ) : createdVehicleForRetry ? (
-                <>
-                  <UserPlus className="w-4 h-4" />
-                  Thử tạo tài khoản lại
-                </>
-              ) : (
-                <>
-                  <Save className="w-4 h-4" />
-                  Lưu hồ sơ xe
-                </>
+          <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-white/75 bg-white/85 backdrop-blur-xl flex flex-wrap items-center justify-between gap-2 safe-bottom">
+            <div>
+              {isAdmin && editingVehicle && onDeleteVehicle && (
+                <button
+                  type="button"
+                  disabled={deletingVehicle}
+                  onClick={() => handleConfirmDeleteVehicle(editingVehicle)}
+                  className={`inline-flex items-center justify-center gap-1.5 min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
+                    confirmDeleteVehicleId === editingVehicle.id
+                      ? 'bg-red-600 hover:bg-red-700 text-white'
+                      : 'bg-red-50/90 hover:bg-red-100 text-red-700 border border-red-200'
+                  }`}
+                >
+                  {deletingVehicle ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3.5 h-3.5" />
+                  )}
+                  {confirmDeleteVehicleId === editingVehicle.id
+                    ? 'Xác nhận xóa xe này'
+                    : 'Xóa xe'}
+                </button>
               )}
-            </button>
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 sm:flex-initial justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmDeleteVehicleId(null);
+                  setShowModal(false);
+                }}
+                className="flex-1 sm:flex-initial min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100/90 sm:bg-transparent hover:bg-white/80"
+              >
+                Hủy
+              </button>
+              <button
+                type="submit"
+                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] px-5 py-2.5 rounded-xl glass-button-primary text-white text-xs font-bold"
+              >
+                <Save className="w-4 h-4" />
+                Lưu hồ sơ xe
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -1498,18 +1349,6 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
     if (!isAdmin) return null;
     return (
       <>
-        {createMemberForVehicle && (
-          <CreateMemberModal
-            vehicle={createMemberForVehicle}
-            onClose={() => setCreateMemberForVehicle(null)}
-            onSuccess={(createdId) => {
-              const plate = createMemberForVehicle.plate;
-              setCreateMemberForVehicle(null);
-              refreshMembers();
-              onNotify?.(`Đã tạo tài khoản thành viên ${createdId} cho xe ${plate}`);
-            }}
-          />
-        )}
 
         {transferMemberTarget && (
           <TransferMemberModal

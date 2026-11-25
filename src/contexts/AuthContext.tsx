@@ -10,7 +10,6 @@ import React, {
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import type { Vehicle } from '../types';
-import { FLEET_STORAGE_KEY } from '../store/useFleetStore';
 import { normalizePlateKey } from '../utils/plate';
 
 export type UserRole = 'admin' | 'user';
@@ -102,7 +101,10 @@ export async function loadProfileForUser(user: User): Promise<UserProfile> {
     ]);
 
     const data = profileRes.data;
-    if (profileRes.error || !data) {
+    if (profileRes.error) {
+      return buildFallbackProfile(user);
+    }
+    if (!data) {
       return buildFallbackProfile(user);
     }
 

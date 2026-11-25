@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "vehicles": [],
+  "orders": [],
+  "items": [],
+  "auditLogs": [],
+  "monthlyBudget": 320000000,
+  "hiddenReportTabs": [],
+  "hiddenDashboardBlocks": [],
+  "dashboardBlockOrder": [
+    "monthly_status",
+    "alerts",
+    "charts",
+    "orders_table"
+  ],
+  "lastUpdated": ""
+}

@@ -118,3 +118,6 @@ export function calcPctChange(current: number, previous: number): number | null 
 export function generateId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
+
+export const REFERENCE_TODAY = new Date().toISOString().slice(0, 10);
+

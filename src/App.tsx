@@ -1727,6 +1727,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     if (res.ok && !opts?.silent) showToast('Đã cập nhật hồ sơ phương tiện.');
                     return res;
                   }}
+                  onDeleteVehicle={store.deleteVehicle}
                   onOpenNewOrderForVehicle={(vid) => openNewOrder(vid)}
                   onEditOrder={openEditOrder}
                   onDeleteOrder={(id) => {
@@ -1768,6 +1769,8 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     if (res.ok && !opts?.silent) showToast('Đã cập nhật hồ sơ phương tiện.');
                     return res;
                   }}
+                  onDeleteVehicle={store.deleteVehicle}
+                  onRefreshFleet={store.refreshData}
                   onNotify={showToast}
                 />
               )}

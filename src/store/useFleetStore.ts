@@ -4,23 +4,26 @@ import {
   AuditLogEntry,
   DEPARTMENTS,
   DashboardBlockId,
+  MaintenanceAction,
+  MaintenanceCategory,
   MaintenanceItem,
   MaintenanceOrder,
+  ServiceType,
   Vehicle,
+  VehicleStatus,
   VehicleType,
 } from '../types';
-import { addDaysISO, formatVND, generateId } from '../utils/format';
+import { addDaysISO, formatVND, REFERENCE_TODAY } from '../utils/format';
 import { formatVietnamesePlate, normalizePlateKey } from '../utils/plate';
 import { ParsedImportRow } from '../utils/excel';
 import { supabase } from '../lib/supabaseClient';
 
-export const FLEET_STORAGE_KEY = 'fleet_maintenance_v1_db';
-const STORAGE_KEY = FLEET_STORAGE_KEY;
+const LEGACY_LOCAL_DB_KEY = 'fleet_maintenance_v1_db';
 const RECENT_PLATES_KEY = 'fleet_maintenance_v1_recent_plates';
 const BUDGET_STORAGE_KEY = 'fleet_maintenance_v1_monthly_budget';
 const ADMIN_VISIBILITY_KEY = 'fleet_maintenance_v1_admin_visibility';
 const DEFAULT_MONTHLY_BUDGET = 320_000_000;
-const REFERENCE_TODAY = new Date().toISOString().slice(0, 10);
+const META_MARKER = '\n[META:';
 
 const DEFAULT_DASHBOARD_BLOCK_ORDER: DashboardBlockId[] = [
   'monthly_status',
@@ -44,28 +47,157 @@ interface FleetDatabaseState {
   lastUpdated: string;
 }
 
-interface SharedServerFleetState extends FleetDatabaseState {
-  version: number;
-  monthlyBudget: number;
-  hiddenReportTabs: AppPage[];
-  hiddenDashboardBlocks: AppPage[];
-  dashboardBlockOrder: DashboardBlockId[];
-}
-
 interface UseFleetStoreOptions {
   actorName?: string;
   isAdmin?: boolean;
   onSyncError?: (message: string) => void;
 }
 
-function loadInitialState(): FleetDatabaseState {
-  return {
-    vehicles: [],
-    orders: [],
-    items: [],
-    auditLogs: [],
-    lastUpdated: new Date().toISOString(),
-  };
+interface TicketItemMeta {
+  category?: MaintenanceCategory;
+  part_name?: string;
+  quantity?: number;
+  unit_price?: number;
+  amount?: number;
+}
+
+interface TicketEncodedMeta {
+  garage?: string;
+  service_type?: ServiceType;
+  driver_name?: string;
+  service_interval_km?: number;
+  items?: Record<string, TicketItemMeta>;
+}
+
+interface VehicleRow {
+  plate: string;
+  vehicle_type: string | null;
+  brand_model: string | null;
+  driver_id: string | null;
+  department: string | null;
+  status: string | null;
+  registration_expiry: string | null;
+  service_interval_km: number | null;
+  note: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+interface TicketRow {
+  id: string;
+  plate: string;
+  service_date: string;
+  odometer_km: number | null;
+  note: string | null;
+  created_by: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+interface ItemRow {
+  id: string;
+  ticket_id: string;
+  item_name: string;
+  action: string | null;
+  po_number: string | null;
+  created_at?: string | null;
+}
+
+interface ActivityLogRow {
+  id: string;
+  user_id: string | null;
+  action: string | null;
+  detail: string | null;
+  created_at?: string | null;
+}
+
+interface ProfileRow {
+  id: string;
+  username: string | null;
+  full_name: string | null;
+  role: string | null;
+}
+
+function createUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function isUuid(val: string | undefined): val is string {
+  return Boolean(
+    val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)
+  );
+}
+
+function inferCategoryFromItemName(itemName: string): MaintenanceCategory {
+  const s = itemName.toLowerCase();
+  if (/lốp|vỏ xe|vá|mâm|van hơi|đảo lốp/.test(s)) return 'Lốp';
+  if (/phanh|thắng|bố thắng|tăng bua|heo thắng/.test(s)) return 'Phanh';
+  if (/nhớt|dầu cầu|dầu hộp số|lọc gió|lọc dầu|lọc nhiên liệu|lọc nhớt|nước làm mát/.test(s))
+    return 'Dầu nhớt-lọc';
+  if (/động cơ|turbo|kim phun|ly hợp|lá côn|bàn ép|két nước|curoa|bơm cao áp|egr|máy/.test(s))
+    return 'Động cơ';
+  if (/điện|ắc quy|bình|đèn|cảm biến|abs|củ đề|máy phát|ecu|rơ-le|gạt mưa/.test(s))
+    return 'Hệ thống điện';
+  if (/gầm|nhíp|phuộc|giảm xóc|thước lái|rô-tuyn|bạc đạn|moay-ơ|các-đăng|bầu hơi|tắc kê|mâm kéo/.test(s))
+    return 'Gầm-treo';
+  if (/điều hòa|máy lạnh|dàn lạnh|dàn nóng|lốc lạnh|gas|quạt gió/.test(s)) return 'Điều hòa';
+  if (/thân vỏ|gò|sơn|kính|gương|cửa|cản|gioăng/.test(s)) return 'Thân vỏ';
+  return 'Khác';
+}
+
+function encodeTicketNote(userNote: string, meta: TicketEncodedMeta): string {
+  const cleanNote = (userNote || '').trim();
+  const payload = JSON.stringify(meta);
+  if (!cleanNote) return `[META:${payload}]`;
+  return `${cleanNote}${META_MARKER}${payload}]`;
+}
+
+function decodeTicketNote(rawNote: string | null | undefined): {
+  note: string;
+  meta: TicketEncodedMeta;
+} {
+  const raw = rawNote ?? '';
+  if (!raw) return { note: '', meta: {} };
+
+  if (raw.startsWith('[META:') && raw.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(raw.slice(6, -1)) as TicketEncodedMeta;
+      return { note: '', meta: parsed && typeof parsed === 'object' ? parsed : {} };
+    } catch {
+      return { note: raw, meta: {} };
+    }
+  }
+
+  const idx = raw.lastIndexOf(META_MARKER);
+  if (idx >= 0 && raw.endsWith(']')) {
+    const jsonPart = raw.slice(idx + META_MARKER.length, -1);
+    try {
+      const parsed = JSON.parse(jsonPart) as TicketEncodedMeta;
+      return {
+        note: raw.slice(0, idx).trim(),
+        meta: parsed && typeof parsed === 'object' ? parsed : {},
+      };
+    } catch {
+      return { note: raw, meta: {} };
+    }
+  }
+
+  return { note: raw, meta: {} };
+}
+
+function mapAuditAction(raw: string | null | undefined): AuditLogEntry['action'] {
+  const upper = String(raw || '').toUpperCase();
+  if (upper === 'CREATE' || upper === 'INSERT' || upper.includes('THÊM')) return 'CREATE';
+  if (upper === 'DELETE' || upper.includes('XÓA')) return 'DELETE';
+  if (upper === 'IMPORT' || upper.includes('EXCEL') || upper.includes('NHẬP')) return 'IMPORT';
+  return 'UPDATE';
 }
 
 function loadRecentPlates(): string[] {
@@ -143,21 +275,16 @@ function loadAdminVisibility(): AdminVisibilityConfig {
   };
 }
 
-async function getAccessToken(): Promise<string | null> {
-  try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    return session?.access_token ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export function useFleetStore(options: UseFleetStoreOptions = {}) {
-  const { actorName = 'Quản lý đội xe', isAdmin = false, onSyncError } = options;
+  const { actorName = 'Admin', isAdmin = false, onSyncError } = options;
 
-  const [db, setDb] = useState<FleetDatabaseState>(() => loadInitialState());
+  const [db, setDb] = useState<FleetDatabaseState>({
+    vehicles: [],
+    orders: [],
+    items: [],
+    auditLogs: [],
+    lastUpdated: new Date().toISOString(),
+  });
   const [recentPlates, setRecentPlates] = useState<string[]>(() => loadRecentPlates());
   const [monthlyBudget, setMonthlyBudgetState] = useState<number>(() => loadMonthlyBudget());
   const [adminVisibility, setAdminVisibility] = useState<AdminVisibilityConfig>(() =>
@@ -167,28 +294,23 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
 
   const dbRef = useRef(db);
   dbRef.current = db;
-  const monthlyBudgetRef = useRef(monthlyBudget);
-  monthlyBudgetRef.current = monthlyBudget;
-  const adminVisibilityRef = useRef(adminVisibility);
-  adminVisibilityRef.current = adminVisibility;
   const onSyncErrorRef = useRef(onSyncError);
   onSyncErrorRef.current = onSyncError;
-
-  const serverVersionRef = useRef(0);
   const pendingWritesRef = useRef(0);
   const isMountedRef = useRef(true);
-  const clientInstanceIdRef = useRef(`cli_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
-  const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const realtimeSubscribedRef = useRef(false);
 
   useEffect(() => {
     isMountedRef.current = true;
+    // Purge legacy localStorage fleet cache so Supabase is strictly the single source of truth
+    try {
+      localStorage.removeItem(LEGACY_LOCAL_DB_KEY);
+    } catch {
+      // ignore
+    }
     return () => {
       isMountedRef.current = false;
     };
   }, []);
-
-
 
   useEffect(() => {
     try {
@@ -214,393 +336,287 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
     }
   }, [adminVisibility]);
 
-  const applyServerState = useCallback(
-    (incoming: SharedServerFleetState, force = false) => {
-      if (!incoming || !Array.isArray(incoming.vehicles)) return;
-      const incomingVersion = typeof incoming.version === 'number' ? incoming.version : 0;
-      if (!force && incomingVersion > 0 && incomingVersion < serverVersionRef.current) {
-        return;
+  const recordActivityLog = useCallback(
+    async (
+      action: AuditLogEntry['action'],
+      entity: AuditLogEntry['entity'],
+      summary: string,
+      details?: string
+    ) => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const userId = session?.user?.id ?? null;
+        const payload = JSON.stringify({ entity, summary, details });
+        await supabase.from('activity_logs').insert({
+          user_id: userId,
+          action,
+          detail: payload,
+        });
+      } catch {
+        // Ignore if activity_logs insert fails silently
       }
-      if (!force && pendingWritesRef.current > 0 && incomingVersion <= serverVersionRef.current) {
-        return;
-      }
-
-      if (incomingVersion > 0) {
-        serverVersionRef.current = incomingVersion;
-      }
-
-      setDb({
-        vehicles: incoming.vehicles,
-        orders: Array.isArray(incoming.orders) ? incoming.orders : [],
-        items: Array.isArray(incoming.items) ? incoming.items : [],
-        auditLogs: Array.isArray(incoming.auditLogs) ? incoming.auditLogs : [],
-        lastUpdated: incoming.lastUpdated || new Date().toISOString(),
-      });
-
-      if (typeof incoming.monthlyBudget === 'number' && incoming.monthlyBudget > 0) {
-        setMonthlyBudgetState(incoming.monthlyBudget);
-      }
-
-      setAdminVisibility((prev) => ({
-        isAdminMode: prev.isAdminMode,
-        hiddenReportTabs: Array.isArray(incoming.hiddenReportTabs)
-          ? incoming.hiddenReportTabs
-          : prev.hiddenReportTabs,
-        hiddenDashboardBlocks: normalizeHiddenBlocks(incoming.hiddenDashboardBlocks),
-        dashboardBlockOrder: normalizeBlockOrder(incoming.dashboardBlockOrder),
-      }));
     },
     []
   );
 
-  const broadcastStateViaSupabase = useCallback((state: SharedServerFleetState) => {
-    const channel = realtimeChannelRef.current;
-    if (!channel || !realtimeSubscribedRef.current) return;
+  const syncFromServer = useCallback(async (opts?: { force?: boolean; showSpinner?: boolean }) => {
+    if (!opts?.force && pendingWritesRef.current > 0) return;
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.user) return;
+
+    if (opts?.showSpinner && isMountedRef.current) setIsSyncing(true);
     try {
-      const serialized = JSON.stringify(state);
-      // Supabase Realtime broadcast messages stay well under 250KB; send full state when compact
-      // or a lightweight refetch signal for very large datasets
-      const payload =
-        serialized.length <= 180_000
-          ? {
-              senderId: clientInstanceIdRef.current,
-              version: state.version,
-              state,
-            }
-          : {
-              senderId: clientInstanceIdRef.current,
-              version: state.version,
-              refetch: true,
-            };
-      void channel.send({
-        type: 'broadcast',
-        event: 'fleet-state-updated',
-        payload,
+      const [vehiclesRes, ticketsRes, itemsRes, logsRes, profilesRes] = await Promise.all([
+        supabase
+          .from('vehicles')
+          .select(
+            'plate, vehicle_type, brand_model, driver_id, department, status, registration_expiry, service_interval_km, note, created_at, updated_at'
+          )
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('maintenance_tickets')
+          .select('id, plate, service_date, odometer_km, note, created_by, created_at, updated_at')
+          .order('service_date', { ascending: false }),
+        supabase
+          .from('maintenance_items')
+          .select('id, ticket_id, item_name, action, po_number, created_at')
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('activity_logs')
+          .select('id, user_id, action, detail, created_at')
+          .order('created_at', { ascending: false })
+          .limit(500),
+        supabase.from('profiles').select('id, username, full_name, role'),
+      ]);
+
+      if (!isMountedRef.current) return;
+
+      const profilesMap = new Map<string, ProfileRow>();
+      for (const p of (profilesRes.data || []) as ProfileRow[]) {
+        profilesMap.set(p.id, p);
+      }
+
+      const rawVehicles = (vehiclesRes.data || []) as VehicleRow[];
+      const rawTickets = (ticketsRes.data || []) as TicketRow[];
+      const rawItems = (itemsRes.data || []) as ItemRow[];
+      const rawLogs = (logsRes.data || []) as ActivityLogRow[];
+
+      const ticketMetaMap = new Map<string, TicketEncodedMeta>();
+      const vehicleByPlateKey = new Map<string, VehicleRow>();
+      for (const v of rawVehicles) {
+        vehicleByPlateKey.set(normalizePlateKey(v.plate), v);
+      }
+
+      const orders: MaintenanceOrder[] = rawTickets.map((t) => {
+        const { note, meta } = decodeTicketNote(t.note);
+        ticketMetaMap.set(t.id, meta);
+
+        const matchedVeh = vehicleByPlateKey.get(normalizePlateKey(t.plate));
+        const driverProfile = matchedVeh?.driver_id
+          ? profilesMap.get(matchedVeh.driver_id)
+          : undefined;
+        const resolvedDriver =
+          meta.driver_name?.trim() ||
+          driverProfile?.full_name?.trim() ||
+          driverProfile?.username?.trim() ||
+          'Chưa phân công';
+
+        return {
+          id: t.id,
+          vehicle_id: matchedVeh?.plate || formatVietnamesePlate(t.plate) || t.plate,
+          service_date: t.service_date,
+          odometer_km: Number(t.odometer_km) || 0,
+          service_interval_km: meta.service_interval_km,
+          garage: meta.garage?.trim() || 'Chưa xác định',
+          driver_name: resolvedDriver,
+          service_type: meta.service_type || 'Định kỳ',
+          note,
+          created_at: t.created_at || new Date().toISOString(),
+          updated_at: t.updated_at || t.created_at || new Date().toISOString(),
+        };
       });
+
+      const items: MaintenanceItem[] = rawItems.map((it) => {
+        const ticketMeta = ticketMetaMap.get(it.ticket_id);
+        const itemMeta = ticketMeta?.items?.[it.id];
+        const qty = itemMeta?.quantity && itemMeta.quantity > 0 ? itemMeta.quantity : 1;
+        const amount = Number(itemMeta?.amount) || 0;
+        const unitPrice =
+          Number(itemMeta?.unit_price) || (qty > 0 ? Math.round(amount / qty) : amount);
+        const actionNormalized: MaintenanceAction =
+          String(it.action || '').toUpperCase().includes('SỬA') ? 'SỬA CHỮA' : 'THAY THẾ';
+
+        return {
+          id: it.id,
+          order_id: it.ticket_id,
+          category: itemMeta?.category || inferCategoryFromItemName(it.item_name),
+          item_name: it.item_name,
+          action: actionNormalized,
+          part_name: itemMeta?.part_name || '',
+          quantity: qty,
+          unit_price: unitPrice,
+          amount,
+          po_number: (it.po_number || '').trim().toUpperCase(),
+        };
+      });
+
+      // Compute operational km/cycle stats per vehicle from real maintenance_tickets
+      const ordersByPlateKey = new Map<string, MaintenanceOrder[]>();
+      for (const o of orders) {
+        const key = normalizePlateKey(o.vehicle_id);
+        const list = ordersByPlateKey.get(key);
+        if (list) list.push(o);
+        else ordersByPlateKey.set(key, [o]);
+      }
+
+      const vehicles: Vehicle[] = rawVehicles.map((v) => {
+        const formattedPlate = formatVietnamesePlate(v.plate) || v.plate;
+        const plateKey = normalizePlateKey(formattedPlate);
+        const vOrders = (ordersByPlateKey.get(plateKey) || []).sort((a, b) =>
+          b.service_date.localeCompare(a.service_date)
+        );
+        const maxKm = vOrders.reduce((max, o) => Math.max(max, o.odometer_km || 0), 0);
+        const latestPeriodic =
+          vOrders.find((o) => o.service_type === 'Định kỳ' && o.odometer_km > 0) ||
+          vOrders.find((o) => o.odometer_km > 0) ||
+          vOrders[0];
+        const intervalKm =
+          Number(v.service_interval_km) ||
+          latestPeriodic?.service_interval_km ||
+          10000;
+        const intervalDays = 90;
+
+        const driverProfile = v.driver_id ? profilesMap.get(v.driver_id) : undefined;
+        const driverName =
+          driverProfile?.full_name?.trim() ||
+          driverProfile?.username?.trim() ||
+          'Chưa phân công';
+
+        return {
+          id: v.plate,
+          plate: formattedPlate,
+          plate_key: plateKey,
+          type: v.vehicle_type || 'Xe 4 chỗ',
+          brand_model: v.brand_model || 'Chưa cập nhật',
+          driver_id: v.driver_id || null,
+          driver_name: driverName,
+          department: v.department || '',
+          status: (v.status as VehicleStatus) || 'Đang hoạt động',
+          registration_due_date: v.registration_expiry || '',
+          current_km: maxKm,
+          service_interval_km: intervalKm,
+          service_interval_days: intervalDays,
+          next_service_km:
+            latestPeriodic && latestPeriodic.odometer_km > 0
+              ? latestPeriodic.odometer_km + intervalKm
+              : 0,
+          next_service_date: latestPeriodic?.service_date
+            ? addDaysISO(latestPeriodic.service_date, intervalDays)
+            : '',
+        };
+      });
+
+      const auditLogs: AuditLogEntry[] = rawLogs.map((l) => {
+        const profile = l.user_id ? profilesMap.get(l.user_id) : undefined;
+        const isProfileAdmin = String(profile?.role || '').toLowerCase() === 'admin';
+        const resolvedActor = isProfileAdmin
+          ? profile?.full_name?.trim() || 'Admin'
+          : profile?.full_name?.trim() || profile?.username?.trim() || 'Thành viên';
+
+        let entity: AuditLogEntry['entity'] = 'system';
+        let summary = l.detail || l.action || '';
+        let details: string | undefined;
+
+        if (l.detail && l.detail.trim().startsWith('{')) {
+          try {
+            const parsed = JSON.parse(l.detail) as {
+              entity?: AuditLogEntry['entity'];
+              summary?: string;
+              details?: string;
+            };
+            if (parsed.entity) entity = parsed.entity;
+            if (parsed.summary) summary = parsed.summary;
+            if (parsed.details) details = parsed.details;
+          } catch {
+            // keep raw detail string
+          }
+        }
+
+        return {
+          id: l.id,
+          timestamp: l.created_at || new Date().toISOString(),
+          actor: resolvedActor,
+          action: mapAuditAction(l.action),
+          entity,
+          summary,
+          details,
+        };
+      });
+
+      if (isMountedRef.current) {
+        setDb({
+          vehicles,
+          orders,
+          items,
+          auditLogs,
+          lastUpdated: new Date().toISOString(),
+        });
+      }
     } catch {
-      // ignore realtime broadcast failure; Postgres/SSE will still deliver updates
+      onSyncErrorRef.current?.('Không thể tải dữ liệu từ Supabase.');
+    } finally {
+      if (opts?.showSpinner && isMountedRef.current) {
+        window.setTimeout(() => {
+          if (isMountedRef.current) setIsSyncing(false);
+        }, 220);
+      }
     }
   }, []);
 
-  const readDirectFromSupabaseFallback = useCallback(async (force = false) => {
-    try {
-      const { data, error } = await supabase
-        .from('fleet_sync_state')
-        .select('version, payload, updated_at')
-        .eq('id', 'primary')
-        .maybeSingle();
-
-      if (error || !data || !data.payload || typeof data.payload !== 'object') {
-        return;
-      }
-      const incoming = data.payload as SharedServerFleetState;
-      const rowVersion = Number(data.version);
-      if (Number.isFinite(rowVersion) && rowVersion >= 1) {
-        incoming.version = rowVersion;
-      }
-      if (typeof data.updated_at === 'string' && data.updated_at) {
-        incoming.lastUpdated = data.updated_at;
-      }
-      if (isMountedRef.current) {
-        applyServerState(incoming, force);
-      }
-    } catch {
-      // Table may not be provisioned yet; ignore silently
-    }
-  }, [applyServerState]);
-
-  const syncFromServer = useCallback(
-    async (opts?: { allowBootstrap?: boolean; force?: boolean; showSpinner?: boolean }) => {
-      const token = await getAccessToken();
-      if (!token) return;
-
-      if (opts?.showSpinner) setIsSyncing(true);
-      try {
-        const res = await fetch('/api/fleet/state', {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          cache: 'no-store',
-        });
-
-        if (!res.ok) {
-          await readDirectFromSupabaseFallback(Boolean(opts?.force));
-          return;
-        }
-        const data = (await res.json()) as {
-          initialized?: boolean;
-          state?: SharedServerFleetState | null;
-        };
-
-        if (!isMountedRef.current) return;
-
-        if (!data.initialized && opts?.allowBootstrap) {
-          const currentDb = dbRef.current;
-          const currentVis = adminVisibilityRef.current;
-          const bootRes = await fetch('/api/fleet/bootstrap', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              vehicles: currentDb.vehicles,
-              orders: currentDb.orders,
-              items: currentDb.items,
-              auditLogs: currentDb.auditLogs,
-              monthlyBudget: monthlyBudgetRef.current,
-              hiddenReportTabs: currentVis.hiddenReportTabs,
-              hiddenDashboardBlocks: currentVis.hiddenDashboardBlocks,
-              dashboardBlockOrder: currentVis.dashboardBlockOrder,
-            }),
-          });
-          if (bootRes.ok) {
-            const bootData = (await bootRes.json()) as { state?: SharedServerFleetState | null };
-            if (bootData.state && isMountedRef.current) {
-              applyServerState(bootData.state, true);
-              broadcastStateViaSupabase(bootData.state);
-            }
-          }
-          return;
-        }
-
-        if (data.state) {
-          applyServerState(data.state, Boolean(opts?.force));
-        }
-      } catch {
-        // Fallback to direct Supabase read when server is momentarily unreachable
-        await readDirectFromSupabaseFallback(Boolean(opts?.force));
-      } finally {
-        if (opts?.showSpinner && isMountedRef.current) {
-          window.setTimeout(() => {
-            if (isMountedRef.current) setIsSyncing(false);
-          }, 260);
-        }
-      }
-    },
-    [applyServerState, broadcastStateViaSupabase, readDirectFromSupabaseFallback]
-  );
-
-  const sendMutation = useCallback(
-    async (
-      url: string,
-      method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
-      body?: unknown
-    ): Promise<void> => {
-      const token = await getAccessToken();
-      if (!token) {
-        onSyncErrorRef.current?.('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-        return;
-      }
-
-      pendingWritesRef.current += 1;
-      try {
-        const res = await fetch(url, {
-          method,
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: body !== undefined ? JSON.stringify(body) : undefined,
-        });
-
-        const payload = (await res.json().catch(() => ({}))) as {
-          error?: string;
-          state?: SharedServerFleetState;
-        };
-
-        if (!res.ok) {
-          if (payload.error) {
-            onSyncErrorRef.current?.(payload.error);
-          } else {
-            onSyncErrorRef.current?.('Không thể đồng bộ thay đổi lên máy chủ.');
-          }
-          await syncFromServer({ force: true });
-          return;
-        }
-
-        if (payload.state && isMountedRef.current) {
-          applyServerState(payload.state, true);
-          // Immediately push the confirmed state to all other devices over Supabase Realtime
-          broadcastStateViaSupabase(payload.state);
-        }
-      } catch {
-        onSyncErrorRef.current?.('Mất kết nối máy chủ — đang đồng bộ lại dữ liệu.');
-        await syncFromServer({ force: true });
-      } finally {
-        pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
-      }
-    },
-    [applyServerState, broadcastStateViaSupabase, syncFromServer]
-  );
-
-  // Supabase Realtime channel (postgres_changes + broadcast) for instant cross-device sync
+  // Initial fetch + Supabase Realtime postgres_changes subscription across all relational tables
   useEffect(() => {
     let active = true;
+    let refreshTimer: number | null = null;
+
+    const scheduleSync = () => {
+      if (!active) return;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        if (active) void syncFromServer({ force: false });
+      }, 150);
+    };
+
+    void syncFromServer({ force: true });
+
     const channel = supabase
-      .channel('fleet-realtime-sync', {
-        config: {
-          broadcast: { self: false, ack: false },
-        },
-      })
+      .channel('fleet-relational-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, scheduleSync)
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'fleet_sync_state',
-          filter: 'id=eq.primary',
-        },
-        (change) => {
-          if (!active) return;
-          const nextRow = change.new as
-            | { version?: number; payload?: SharedServerFleetState; updated_at?: string }
-            | undefined;
-          if (nextRow?.payload && Array.isArray(nextRow.payload.vehicles)) {
-            const incoming: SharedServerFleetState = {
-              ...nextRow.payload,
-              version:
-                typeof nextRow.version === 'number' && nextRow.version >= 1
-                  ? nextRow.version
-                  : nextRow.payload.version,
-              lastUpdated: nextRow.updated_at || nextRow.payload.lastUpdated,
-            };
-            applyServerState(incoming, false);
-          } else {
-            void syncFromServer({ force: false });
-          }
-        }
+        { event: '*', schema: 'public', table: 'maintenance_tickets' },
+        scheduleSync
       )
-      .on('broadcast', { event: 'fleet-state-updated' }, ({ payload }) => {
-        if (!active || !payload || typeof payload !== 'object') return;
-        const msg = payload as {
-          senderId?: string;
-          version?: number;
-          state?: SharedServerFleetState;
-          refetch?: boolean;
-        };
-        if (msg.senderId && msg.senderId === clientInstanceIdRef.current) return;
-        if (msg.state && Array.isArray(msg.state.vehicles)) {
-          applyServerState(msg.state, false);
-        } else if (msg.refetch || (typeof msg.version === 'number' && msg.version > serverVersionRef.current)) {
-          void syncFromServer({ force: false });
-        }
-      })
-      .subscribe((status) => {
-        if (!active) return;
-        realtimeSubscribedRef.current = status === 'SUBSCRIBED';
-        if (status === 'SUBSCRIBED') {
-          void syncFromServer({ force: false });
-        }
-      });
-
-    realtimeChannelRef.current = channel;
-
-    return () => {
-      active = false;
-      realtimeSubscribedRef.current = false;
-      realtimeChannelRef.current = null;
-      void supabase.removeChannel(channel);
-    };
-  }, [applyServerState, syncFromServer]);
-
-  // Initial hydration + Real-time SSE cross-device stream + focus/visibility/periodic fallback sync
-  useEffect(() => {
-    let active = true;
-    let eventSource: EventSource | null = null;
-    let reconnectTimer: number | null = null;
-    let retryDelay = 1500;
-
-    const closeStream = () => {
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-      if (reconnectTimer !== null) {
-        window.clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-    };
-
-    const connectStream = async () => {
-      if (!active) return;
-      closeStream();
-
-      const token = await getAccessToken();
-      if (!token || !active) return;
-
-      try {
-        const ticketRes = await fetch('/api/fleet/sse-ticket', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        if (!ticketRes.ok || !active) {
-          scheduleReconnect();
-          return;
-        }
-
-        const { ticket } = (await ticketRes.json()) as { ticket?: string };
-        if (!ticket || !active) {
-          scheduleReconnect();
-          return;
-        }
-
-        const es = new EventSource(`/api/fleet/stream?ticket=${encodeURIComponent(ticket)}`);
-        eventSource = es;
-
-        es.addEventListener('connected', (event) => {
-          retryDelay = 1500;
-          try {
-            const meta = JSON.parse((event as MessageEvent).data) as { version?: number };
-            if (typeof meta.version === 'number' && meta.version > serverVersionRef.current) {
-              void syncFromServer({ force: false });
-            }
-          } catch {
-            // ignore
-          }
-        });
-
-        es.addEventListener('fleet-update', (event) => {
-          try {
-            const incoming = JSON.parse((event as MessageEvent).data) as SharedServerFleetState;
-            applyServerState(incoming, false);
-          } catch {
-            // ignore malformed event
-          }
-        });
-
-        es.onerror = () => {
-          if (!active) return;
-          closeStream();
-          scheduleReconnect();
-        };
-      } catch {
-        scheduleReconnect();
-      }
-    };
-
-    const scheduleReconnect = () => {
-      if (!active) return;
-      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
-      reconnectTimer = window.setTimeout(() => {
-        retryDelay = Math.min(15_000, Math.round(retryDelay * 1.8));
-        void connectStream();
-      }, retryDelay);
-    };
-
-    void syncFromServer({ allowBootstrap: true, force: true }).then(() => {
-      if (active) void connectStream();
-    });
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'maintenance_items' },
+        scheduleSync
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'activity_logs' },
+        scheduleSync
+      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, scheduleSync)
+      .subscribe();
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
         void syncFromServer({ force: false });
-        if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
-          void connectStream();
-        }
       }
     };
 
@@ -612,45 +628,18 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
       if (document.visibilityState === 'visible' && pendingWritesRef.current === 0) {
         void syncFromServer({ force: false });
       }
-    }, 15_000);
+    }, 20_000);
 
     return () => {
       active = false;
-      closeStream();
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
       window.removeEventListener('focus', handleVisibilityOrFocus);
       window.removeEventListener('online', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       window.clearInterval(pollId);
+      void supabase.removeChannel(channel);
     };
-  }, [applyServerState, syncFromServer]);
-
-  // Same-browser multi-tab fallback listener
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY && e.newValue && pendingWritesRef.current === 0) {
-        try {
-          const next = JSON.parse(e.newValue) as FleetDatabaseState;
-          setDb(next);
-        } catch {
-          // ignore
-        }
-      }
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
-
-  const persistVisibilityToServer = useCallback(
-    (nextVis: AdminVisibilityConfig) => {
-      if (!isAdmin) return;
-      void sendMutation('/api/fleet/visibility', 'PUT', {
-        hiddenReportTabs: nextVis.hiddenReportTabs,
-        hiddenDashboardBlocks: nextVis.hiddenDashboardBlocks,
-        dashboardBlockOrder: nextVis.dashboardBlockOrder,
-      });
-    },
-    [isAdmin, sendMutation]
-  );
+  }, [syncFromServer]);
 
   const toggleAdminMode = useCallback(() => {
     setAdminVisibility((prev) => ({ ...prev, isAdminMode: !prev.isAdminMode }));
@@ -659,113 +648,94 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
   const toggleReportTabVisibility = useCallback(
     (tab: AppPage) => {
       if (!isAdmin || tab === 'dashboard') return;
-      const prev = adminVisibilityRef.current;
-      const exists = prev.hiddenReportTabs.includes(tab);
-      const next: AdminVisibilityConfig = {
-        ...prev,
-        hiddenReportTabs: exists
-          ? prev.hiddenReportTabs.filter((t) => t !== tab)
-          : [...prev.hiddenReportTabs, tab],
-      };
-      setAdminVisibility(next);
-      persistVisibilityToServer(next);
+      setAdminVisibility((prev) => {
+        const exists = prev.hiddenReportTabs.includes(tab);
+        return {
+          ...prev,
+          hiddenReportTabs: exists
+            ? prev.hiddenReportTabs.filter((t) => t !== tab)
+            : [...prev.hiddenReportTabs, tab],
+        };
+      });
     },
-    [isAdmin, persistVisibilityToServer]
+    [isAdmin]
   );
 
   const toggleDashboardBlockVisibility = useCallback(
     (block: DashboardBlockId) => {
       if (!isAdmin) return;
-      const prev = adminVisibilityRef.current;
-      const exists = prev.hiddenDashboardBlocks.includes(block);
-      const next: AdminVisibilityConfig = {
-        ...prev,
-        hiddenDashboardBlocks: exists
-          ? prev.hiddenDashboardBlocks.filter((b) => b !== block)
-          : [...prev.hiddenDashboardBlocks, block],
-      };
-      setAdminVisibility(next);
-      persistVisibilityToServer(next);
+      setAdminVisibility((prev) => {
+        const exists = prev.hiddenDashboardBlocks.includes(block);
+        return {
+          ...prev,
+          hiddenDashboardBlocks: exists
+            ? prev.hiddenDashboardBlocks.filter((b) => b !== block)
+            : [...prev.hiddenDashboardBlocks, block],
+        };
+      });
     },
-    [isAdmin, persistVisibilityToServer]
+    [isAdmin]
   );
 
   const moveDashboardBlock = useCallback(
     (block: DashboardBlockId, direction: 'up' | 'down') => {
       if (!isAdmin) return;
-      const prev = adminVisibilityRef.current;
-      const nextOrder = [...prev.dashboardBlockOrder];
-      const idx = nextOrder.indexOf(block);
-      if (idx === -1) return;
-      const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
-      if (targetIdx < 0 || targetIdx >= nextOrder.length) return;
-      const [moved] = nextOrder.splice(idx, 1);
-      nextOrder.splice(targetIdx, 0, moved);
-      const next: AdminVisibilityConfig = { ...prev, dashboardBlockOrder: nextOrder };
-      setAdminVisibility(next);
-      persistVisibilityToServer(next);
+      setAdminVisibility((prev) => {
+        const nextOrder = [...prev.dashboardBlockOrder];
+        const idx = nextOrder.indexOf(block);
+        if (idx === -1) return prev;
+        const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+        if (targetIdx < 0 || targetIdx >= nextOrder.length) return prev;
+        const [moved] = nextOrder.splice(idx, 1);
+        nextOrder.splice(targetIdx, 0, moved);
+        return { ...prev, dashboardBlockOrder: nextOrder };
+      });
     },
-    [isAdmin, persistVisibilityToServer]
+    [isAdmin]
   );
 
   const reorderDashboardBlocks = useCallback(
     (sourceBlock: DashboardBlockId, targetBlock: DashboardBlockId) => {
       if (!isAdmin || sourceBlock === targetBlock) return;
-      const prev = adminVisibilityRef.current;
-      const nextOrder = [...prev.dashboardBlockOrder];
-      const fromIdx = nextOrder.indexOf(sourceBlock);
-      const toIdx = nextOrder.indexOf(targetBlock);
-      if (fromIdx === -1 || toIdx === -1) return;
-      const [moved] = nextOrder.splice(fromIdx, 1);
-      nextOrder.splice(toIdx, 0, moved);
-      const next: AdminVisibilityConfig = { ...prev, dashboardBlockOrder: nextOrder };
-      setAdminVisibility(next);
-      persistVisibilityToServer(next);
+      setAdminVisibility((prev) => {
+        const nextOrder = [...prev.dashboardBlockOrder];
+        const fromIdx = nextOrder.indexOf(sourceBlock);
+        const toIdx = nextOrder.indexOf(targetBlock);
+        if (fromIdx === -1 || toIdx === -1) return prev;
+        const [moved] = nextOrder.splice(fromIdx, 1);
+        nextOrder.splice(toIdx, 0, moved);
+        return { ...prev, dashboardBlockOrder: nextOrder };
+      });
     },
-    [isAdmin, persistVisibilityToServer]
+    [isAdmin]
   );
 
   const resetReportVisibility = useCallback(() => {
     if (!isAdmin) return;
-    const prev = adminVisibilityRef.current;
-    const next: AdminVisibilityConfig = {
+    setAdminVisibility((prev) => ({
       ...prev,
       hiddenReportTabs: [],
       hiddenDashboardBlocks: [],
       dashboardBlockOrder: [...DEFAULT_DASHBOARD_BLOCK_ORDER],
-    };
-    setAdminVisibility(next);
-    persistVisibilityToServer(next);
-  }, [isAdmin, persistVisibilityToServer]);
+    }));
+  }, [isAdmin]);
 
   const refreshData = useCallback(() => {
     void syncFromServer({ force: true, showSpinner: true });
   }, [syncFromServer]);
 
   const setMonthlyBudget = useCallback(
-    (nextBudget: number, actor = actorName) => {
+    (nextBudget: number) => {
       if (!isAdmin) return;
       const clean = Math.max(1_000_000, Math.round(nextBudget));
       setMonthlyBudgetState(clean);
-      const now = new Date().toISOString();
-      setDb((prev) => ({
-        ...prev,
-        auditLogs: [
-          {
-            id: generateId('log'),
-            timestamp: now,
-            actor,
-            action: 'UPDATE',
-            entity: 'system',
-            summary: `Cập nhật ngân sách bảo dưỡng tháng thành ${formatVND(clean)}`,
-          },
-          ...prev.auditLogs,
-        ],
-        lastUpdated: now,
-      }));
-      void sendMutation('/api/fleet/budget', 'PUT', { monthlyBudget: clean });
+      void recordActivityLog(
+        'UPDATE',
+        'system',
+        `Cập nhật ngân sách bảo dưỡng tháng thành ${formatVND(clean)}`
+      );
     },
-    [actorName, isAdmin, sendMutation]
+    [isAdmin, recordActivityLog]
   );
 
   const pushRecentPlate = useCallback((plate: string) => {
@@ -783,7 +753,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
   const addVehicle = useCallback(
     (
       payload: Omit<Vehicle, 'id' | 'plate_key'>,
-      actor = actorName
+      _actor = actorName
     ): { ok: true; vehicle: Vehicle } | { ok: false; error: string } => {
       if (!isAdmin) {
         return { ok: false, error: 'Chỉ Admin mới có quyền thêm xe mới.' };
@@ -800,40 +770,74 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
 
       const newVehicle: Vehicle = {
         ...payload,
-        id: generateId('veh'),
+        id: formattedPlate,
         plate: formattedPlate,
         plate_key: plateKey,
-      };
-
-      const log: AuditLogEntry = {
-        id: generateId('log'),
-        timestamp: new Date().toISOString(),
-        actor,
-        action: 'CREATE',
-        entity: 'vehicle',
-        summary: `Thêm xe mới ${newVehicle.plate} (${newVehicle.type})`,
-        details: `${newVehicle.brand_model || 'Chưa rõ model'} · Tài xế: ${newVehicle.driver_name || '—'} · ${newVehicle.department}`,
+        driver_id: payload.driver_id || null,
+        driver_name: payload.driver_name || 'Chưa phân công',
       };
 
       setDb((prev) => ({
         ...prev,
-        vehicles: [newVehicle, ...prev.vehicles],
-        auditLogs: [log, ...prev.auditLogs],
+        vehicles: [
+          newVehicle,
+          ...prev.vehicles.map((v) =>
+            newVehicle.driver_id && v.driver_id === newVehicle.driver_id
+              ? { ...v, driver_id: null, driver_name: 'Chưa phân công' }
+              : v
+          ),
+        ],
         lastUpdated: new Date().toISOString(),
       }));
 
-      void sendMutation('/api/fleet/vehicles', 'POST', { vehicle: newVehicle });
+      void (async () => {
+        pendingWritesRef.current += 1;
+        try {
+          if (newVehicle.driver_id) {
+            await supabase
+              .from('vehicles')
+              .update({ driver_id: null })
+              .eq('driver_id', newVehicle.driver_id);
+          }
+
+          const { error } = await supabase.from('vehicles').insert({
+            plate: newVehicle.plate,
+            vehicle_type: newVehicle.type,
+            brand_model: newVehicle.brand_model || 'Chưa cập nhật',
+            driver_id: newVehicle.driver_id || null,
+            department: newVehicle.department,
+            status: newVehicle.status || 'Đang hoạt động',
+            registration_expiry: newVehicle.registration_due_date || null,
+            service_interval_km: newVehicle.service_interval_km || 10000,
+          });
+
+          if (error) {
+            onSyncErrorRef.current?.(error.message || 'Không thể lưu xe mới lên Supabase.');
+          } else {
+            await recordActivityLog(
+              'CREATE',
+              'vehicle',
+              `Thêm xe mới ${newVehicle.plate} (${newVehicle.type})`,
+              `${newVehicle.brand_model || 'Chưa rõ model'} · Tài xế: ${newVehicle.driver_name || 'Chưa phân công'} · ${newVehicle.department}`
+            );
+          }
+        } finally {
+          pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+          await syncFromServer({ force: true });
+        }
+      })();
+
       return { ok: true, vehicle: newVehicle };
     },
-    [actorName, isAdmin, sendMutation]
+    [actorName, isAdmin, recordActivityLog, syncFromServer]
   );
 
   const bulkAddPlates = useCallback(
     (
       rawEntries: string[],
-      defaultType: VehicleType = 'Xe tải',
-      defaultDepartment: string = DEPARTMENTS[0],
-      actor = actorName
+      defaultType: VehicleType = 'Xe 4 chỗ',
+      defaultDepartment: string = DEPARTMENTS[0] || 'Văn Phòng HCM',
+      _actor = actorName
     ): { added: Vehicle[]; skipped: string[] } => {
       if (!isAdmin) {
         return { added: [], skipped: rawEntries };
@@ -858,16 +862,16 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
         }
         existingKeys.add(plateKey);
         const typeCandidate = (parts[1] as VehicleType) || defaultType;
-        const driverCandidate = parts[2] || 'Chưa phân công';
-        const intervalKm = typeCandidate === 'Đầu kéo' ? 15000 : 10000;
+        const intervalKm = 10000;
 
         added.push({
-          id: generateId('veh'),
+          id: formattedPlate,
           plate: formattedPlate,
           plate_key: plateKey,
           type: typeCandidate,
-          brand_model: 'Đã nạp từ danh sách Admin',
-          driver_name: driverCandidate,
+          brand_model: 'Chưa cập nhật',
+          driver_id: null,
+          driver_name: 'Chưa phân công',
           department: defaultDepartment,
           status: 'Đang hoạt động',
           registration_due_date: addDaysISO(REFERENCE_TODAY, 180),
@@ -880,46 +884,64 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
       }
 
       if (added.length > 0) {
-        const now = new Date().toISOString();
-        const log: AuditLogEntry = {
-          id: generateId('log'),
-          timestamp: now,
-          actor,
-          action: 'CREATE',
-          entity: 'vehicle',
-          summary: `Admin nạp danh sách ${added.length} biển số xe mới`,
-          details:
-            added
-              .map((v) => v.plate)
-              .slice(0, 8)
-              .join(', ') + (added.length > 8 ? '...' : ''),
-        };
-
         setDb((prev) => ({
           ...prev,
           vehicles: [...added, ...prev.vehicles],
-          auditLogs: [log, ...prev.auditLogs],
-          lastUpdated: now,
+          lastUpdated: new Date().toISOString(),
         }));
 
-        void sendMutation('/api/fleet/vehicles/bulk', 'POST', { vehicles: added });
+        void (async () => {
+          pendingWritesRef.current += 1;
+          try {
+            const { error } = await supabase.from('vehicles').insert(
+              added.map((v) => ({
+                plate: v.plate,
+                vehicle_type: v.type,
+                brand_model: v.brand_model,
+                driver_id: null,
+                department: v.department,
+                status: v.status,
+                registration_expiry: v.registration_due_date || null,
+                service_interval_km: v.service_interval_km,
+              }))
+            );
+            if (error) {
+              onSyncErrorRef.current?.(error.message || 'Không thể nạp danh sách xe lên Supabase.');
+            } else {
+              await recordActivityLog(
+                'CREATE',
+                'vehicle',
+                `Admin nạp danh sách ${added.length} biển số xe mới`,
+                added
+                  .map((v) => v.plate)
+                  .slice(0, 8)
+                  .join(', ') + (added.length > 8 ? '...' : '')
+              );
+            }
+          } finally {
+            pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+            await syncFromServer({ force: true });
+          }
+        })();
       }
 
       return { added, skipped };
     },
-    [actorName, isAdmin, sendMutation]
+    [actorName, isAdmin, recordActivityLog, syncFromServer]
   );
 
   const updateVehicle = useCallback(
     (
       vehicleId: string,
       updates: Partial<Omit<Vehicle, 'id' | 'plate_key'>>,
-      actor = actorName
+      _actor = actorName
     ): { ok: boolean; error?: string } => {
       if (!isAdmin) {
         return { ok: false, error: 'Chỉ Admin mới có quyền cập nhật thông tin xe.' };
       }
-      const target = dbRef.current.vehicles.find((v) => v.id === vehicleId);
+      const target = dbRef.current.vehicles.find(
+        (v) => v.id === vehicleId || v.plate === vehicleId
+      );
       if (!target) return { ok: false, error: 'Không tìm thấy xe.' };
 
       const nextPlate = updates.plate ? formatVietnamesePlate(updates.plate) : target.plate;
@@ -927,7 +949,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
 
       if (
         nextPlateKey !== target.plate_key &&
-        dbRef.current.vehicles.some((v) => v.id !== vehicleId && v.plate_key === nextPlateKey)
+        dbRef.current.vehicles.some((v) => v.id !== target.id && v.plate_key === nextPlateKey)
       ) {
         return { ok: false, error: `Biển số ${nextPlate} đã tồn tại.` };
       }
@@ -935,40 +957,132 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
       const updated: Vehicle = {
         ...target,
         ...updates,
+        id: nextPlate,
         plate: nextPlate,
         plate_key: nextPlateKey,
       };
 
-      const log: AuditLogEntry = {
-        id: generateId('log'),
-        timestamp: new Date().toISOString(),
-        actor,
-        action: 'UPDATE',
-        entity: 'vehicle',
-        summary: `Cập nhật thông tin xe ${updated.plate}`,
-        details: `Trạng thái: ${updated.status} · Km hiện tại: ${updated.current_km.toLocaleString('vi-VN')} km`,
-      };
-
       setDb((prev) => ({
         ...prev,
-        vehicles: prev.vehicles.map((v) => (v.id === vehicleId ? updated : v)),
-        auditLogs: [log, ...prev.auditLogs],
+        vehicles: prev.vehicles.map((v) => {
+          if (v.id === target.id) return updated;
+          if (updated.driver_id && v.driver_id === updated.driver_id) {
+            return { ...v, driver_id: null, driver_name: 'Chưa phân công' };
+          }
+          return v;
+        }),
         lastUpdated: new Date().toISOString(),
       }));
 
-      void sendMutation(`/api/fleet/vehicles/${encodeURIComponent(vehicleId)}`, 'PATCH', {
-        updates,
-      });
+      void (async () => {
+        pendingWritesRef.current += 1;
+        try {
+          if (updates.driver_id) {
+            await supabase
+              .from('vehicles')
+              .update({ driver_id: null })
+              .eq('driver_id', updates.driver_id)
+              .neq('plate', target.plate);
+          }
+
+          const patch: Record<string, unknown> = {};
+          if (updates.plate !== undefined) patch.plate = nextPlate;
+          if (updates.type !== undefined) patch.vehicle_type = updates.type;
+          if (updates.brand_model !== undefined) patch.brand_model = updates.brand_model;
+          if (updates.driver_id !== undefined) patch.driver_id = updates.driver_id;
+          if (updates.department !== undefined) patch.department = updates.department;
+          if (updates.status !== undefined) patch.status = updates.status;
+          if (updates.registration_due_date !== undefined) {
+            patch.registration_expiry = updates.registration_due_date || null;
+          }
+          if (updates.service_interval_km !== undefined) {
+            patch.service_interval_km = updates.service_interval_km;
+          }
+
+          if (Object.keys(patch).length > 0) {
+            const { error } = await supabase
+              .from('vehicles')
+              .update(patch)
+              .eq('plate', target.plate);
+
+            if (error) {
+              onSyncErrorRef.current?.(error.message || 'Không thể cập nhật thông tin xe.');
+            } else {
+              await recordActivityLog(
+                'UPDATE',
+                'vehicle',
+                `Cập nhật thông tin xe ${updated.plate}`,
+                `Trạng thái: ${updated.status} · Tài xế: ${updated.driver_name}`
+              );
+            }
+          }
+        } finally {
+          pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+          await syncFromServer({ force: true });
+        }
+      })();
+
       return { ok: true };
     },
-    [actorName, isAdmin, sendMutation]
+    [actorName, isAdmin, recordActivityLog, syncFromServer]
+  );
+
+  const deleteVehicle = useCallback(
+    async (vehicleId: string): Promise<{ ok: boolean; error?: string }> => {
+      if (!isAdmin) {
+        return { ok: false, error: 'Chỉ Admin mới có quyền xóa xe.' };
+      }
+      const target = dbRef.current.vehicles.find(
+        (v) => v.id === vehicleId || v.plate === vehicleId
+      );
+      if (!target) {
+        return { ok: false, error: 'Không tìm thấy xe cần xóa.' };
+      }
+
+      pendingWritesRef.current += 1;
+      try {
+        // Delete child items and tickets first so FK constraints never reject vehicle deletion
+        const { data: relatedTickets } = await supabase
+          .from('maintenance_tickets')
+          .select('id')
+          .eq('plate', target.plate);
+
+        const ticketIds = (relatedTickets || []).map((t: { id: string }) => t.id);
+        if (ticketIds.length > 0) {
+          await supabase.from('maintenance_items').delete().in('ticket_id', ticketIds);
+          await supabase.from('maintenance_tickets').delete().in('id', ticketIds);
+        }
+
+        const { error } = await supabase.from('vehicles').delete().eq('plate', target.plate);
+        if (error) {
+          onSyncErrorRef.current?.(error.message || 'Không thể xóa xe khỏi Supabase.');
+          return { ok: false, error: error.message };
+        }
+
+        await recordActivityLog(
+          'DELETE',
+          'vehicle',
+          `Xóa xe ${target.plate} khỏi đội xe`,
+          `${target.type} · ${target.department}`
+        );
+
+        await syncFromServer({ force: true });
+        return { ok: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Lỗi xóa xe.';
+        return { ok: false, error: msg };
+      } finally {
+        pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+      }
+    },
+    [isAdmin, recordActivityLog, syncFromServer]
   );
 
   const saveOrder = useCallback(
     (
       orderPayload: Omit<MaintenanceOrder, 'id' | 'created_at' | 'updated_at'> & { id?: string },
       itemPayloads: Array<Omit<MaintenanceItem, 'id' | 'order_id'> & { id?: string }>,
-      actor = actorName
+      _actor = actorName
     ) => {
       const isEdit = Boolean(orderPayload.id);
       if (isEdit && !isAdmin) {
@@ -977,11 +1091,28 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
       }
 
       const now = new Date().toISOString();
-      const orderId = orderPayload.id || generateId('ord');
+      const orderId = isEdit && isUuid(orderPayload.id) ? orderPayload.id! : createUuid();
+      const vehicle = dbRef.current.vehicles.find(
+        (v) => v.id === orderPayload.vehicle_id || v.plate === orderPayload.vehicle_id
+      );
+      const targetPlate = vehicle?.plate || orderPayload.vehicle_id;
+
+      const nextItems: MaintenanceItem[] = itemPayloads.map((it) => ({
+        id: isUuid(it.id) ? it.id! : createUuid(),
+        order_id: orderId,
+        category: it.category,
+        item_name: it.item_name.trim(),
+        action: it.action,
+        part_name: it.part_name.trim(),
+        quantity: it.quantity,
+        unit_price: it.unit_price,
+        amount: it.amount,
+        po_number: it.po_number.trim().toUpperCase(),
+      }));
 
       const nextOrder: MaintenanceOrder = {
         id: orderId,
-        vehicle_id: orderPayload.vehicle_id,
+        vehicle_id: targetPlate,
         service_date: orderPayload.service_date,
         odometer_km: orderPayload.odometer_km,
         service_interval_km: orderPayload.service_interval_km,
@@ -995,101 +1126,135 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
         updated_at: now,
       };
 
-      const nextItems: MaintenanceItem[] = itemPayloads.map((it) => ({
-        id: it.id || generateId('it'),
-        order_id: orderId,
-        category: it.category,
-        item_name: it.item_name.trim(),
-        action: it.action,
-        part_name: it.part_name.trim(),
-        quantity: it.quantity,
-        unit_price: it.unit_price,
-        amount: it.amount,
-        po_number: it.po_number.trim().toUpperCase(),
-      }));
-
       const totalAmount = nextItems.reduce((s, it) => s + it.amount, 0);
-      const vehicle = dbRef.current.vehicles.find((v) => v.id === nextOrder.vehicle_id);
       const poList = Array.from(new Set(nextItems.map((i) => i.po_number).filter(Boolean))).join(
         ', '
       );
 
-      const log: AuditLogEntry = {
-        id: generateId('log'),
-        timestamp: now,
-        actor,
-        action: isEdit ? 'UPDATE' : 'CREATE',
-        entity: 'order',
-        summary: `${isEdit ? 'Cập nhật' : 'Thêm mới'} phiếu bảo dưỡng xe ${vehicle?.plate ?? ''} ngày ${nextOrder.service_date}`,
-        details: `${nextItems.length} hạng mục · ${formatVND(totalAmount)}${poList ? ` · ${poList}` : ' · Chưa có PO'}`,
-      };
+      const itemsMeta: Record<string, TicketItemMeta> = {};
+      for (const it of nextItems) {
+        itemsMeta[it.id] = {
+          category: it.category,
+          part_name: it.part_name,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          amount: it.amount,
+        };
+      }
+
+      const encodedNote = encodeTicketNote(nextOrder.note, {
+        garage: nextOrder.garage,
+        service_type: nextOrder.service_type,
+        driver_name: nextOrder.driver_name,
+        service_interval_km: nextOrder.service_interval_km,
+        items: itemsMeta,
+      });
 
       setDb((prev) => {
         const orders = isEdit
           ? prev.orders.map((o) => (o.id === orderId ? nextOrder : o))
           : [nextOrder, ...prev.orders];
-
         const otherItems = prev.items.filter((it) => it.order_id !== orderId);
-        const items = [...nextItems, ...otherItems];
-
-        const vehicles = prev.vehicles.map((v) => {
-          if (v.id !== nextOrder.vehicle_id) return v;
-          const updatedKm =
-            nextOrder.odometer_km > v.current_km || v.current_km === 0
-              ? nextOrder.odometer_km
-              : v.current_km;
-          const nextIntervalKm =
-            nextOrder.service_interval_km && nextOrder.service_interval_km >= 1000
-              ? nextOrder.service_interval_km
-              : v.service_interval_km || 10000;
-          const isPeriodic = nextOrder.service_type === 'Định kỳ';
-          const shouldRecomputeDue =
-            (isPeriodic || v.next_service_km <= 0) && nextOrder.odometer_km > 0;
-          return {
-            ...v,
-            current_km: updatedKm,
-            service_interval_km: nextIntervalKm,
-            next_service_km: shouldRecomputeDue
-              ? nextOrder.odometer_km + nextIntervalKm
-              : v.next_service_km,
-            next_service_date:
-              isPeriodic || !v.next_service_date
-                ? addDaysISO(nextOrder.service_date, v.service_interval_days || 90)
-                : v.next_service_date,
-          };
-        });
-
         return {
-          vehicles,
+          ...prev,
           orders,
-          items,
-          auditLogs: [log, ...prev.auditLogs],
+          items: [...nextItems, ...otherItems],
           lastUpdated: now,
         };
       });
 
-      if (isEdit) {
-        void sendMutation(`/api/fleet/orders/${encodeURIComponent(orderId)}`, 'PUT', {
-          order: nextOrder,
-          items: nextItems,
-        });
-      } else {
-        void sendMutation('/api/fleet/orders', 'POST', {
-          order: nextOrder,
-          items: nextItems,
-        });
-      }
+      void (async () => {
+        pendingWritesRef.current += 1;
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          const userId = session?.user?.id ?? null;
+
+          if (isEdit) {
+            const { error: ticketErr } = await supabase
+              .from('maintenance_tickets')
+              .update({
+                plate: targetPlate,
+                service_date: nextOrder.service_date,
+                odometer_km: nextOrder.odometer_km,
+                note: encodedNote,
+                updated_at: now,
+              })
+              .eq('id', orderId);
+
+            if (ticketErr) {
+              onSyncErrorRef.current?.(
+                ticketErr.message || 'Không thể cập nhật phiếu bảo dưỡng.'
+              );
+              return;
+            }
+            await supabase.from('maintenance_items').delete().eq('ticket_id', orderId);
+          } else {
+            const { error: ticketErr } = await supabase.from('maintenance_tickets').insert({
+              id: orderId,
+              plate: targetPlate,
+              service_date: nextOrder.service_date,
+              odometer_km: nextOrder.odometer_km,
+              note: encodedNote,
+              created_by: userId,
+            });
+
+            if (ticketErr) {
+              onSyncErrorRef.current?.(ticketErr.message || 'Không thể lưu phiếu bảo dưỡng mới.');
+              return;
+            }
+          }
+
+          if (nextItems.length > 0) {
+            const { error: itemsErr } = await supabase.from('maintenance_items').insert(
+              nextItems.map((it) => ({
+                id: it.id,
+                ticket_id: orderId,
+                item_name: it.item_name,
+                action: it.action,
+                po_number: it.po_number,
+              }))
+            );
+            if (itemsErr) {
+              onSyncErrorRef.current?.(itemsErr.message || 'Không thể lưu hạng mục bảo dưỡng.');
+            }
+          }
+
+          if (
+            nextOrder.service_interval_km &&
+            nextOrder.service_interval_km >= 1000 &&
+            vehicle &&
+            nextOrder.service_interval_km !== vehicle.service_interval_km
+          ) {
+            await supabase
+              .from('vehicles')
+              .update({ service_interval_km: nextOrder.service_interval_km })
+              .eq('plate', targetPlate);
+          }
+
+          await recordActivityLog(
+            isEdit ? 'UPDATE' : 'CREATE',
+            'order',
+            `${isEdit ? 'Cập nhật' : 'Thêm mới'} phiếu bảo dưỡng xe ${targetPlate} ngày ${nextOrder.service_date}`,
+            `${nextItems.length} hạng mục · ${formatVND(totalAmount)}${poList ? ` · ${poList}` : ' · Chưa có PO'}`
+          );
+        } finally {
+          pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+          await syncFromServer({ force: true });
+        }
+      })();
 
       return orderId;
     },
-    [actorName, isAdmin, sendMutation]
+    [actorName, isAdmin, recordActivityLog, syncFromServer]
   );
 
   const appendItemsToExistingOrder = useCallback(
     (
       orderId: string,
       newItems: Array<Omit<MaintenanceItem, 'id' | 'order_id'>>,
-      actor = actorName
+      _actor = actorName
     ) => {
       if (!isAdmin) return;
       const now = new Date().toISOString();
@@ -1099,38 +1264,74 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
 
       const created: MaintenanceItem[] = newItems.map((it) => ({
         ...it,
-        id: generateId('it'),
+        id: createUuid(),
         order_id: orderId,
         po_number: it.po_number.trim().toUpperCase(),
       }));
-
-      const log: AuditLogEntry = {
-        id: generateId('log'),
-        timestamp: now,
-        actor,
-        action: 'UPDATE',
-        entity: 'order',
-        summary: `Gộp thêm ${created.length} hạng mục vào phiếu xe ${veh?.plate ?? ''} (${targetOrder.service_date})`,
-        details: `Giá trị thêm: ${formatVND(created.reduce((s, x) => s + x.amount, 0))}`,
-      };
 
       setDb((prev) => ({
         ...prev,
         orders: prev.orders.map((o) => (o.id === orderId ? { ...o, updated_at: now } : o)),
         items: [...created, ...prev.items],
-        auditLogs: [log, ...prev.auditLogs],
         lastUpdated: now,
       }));
 
-      void sendMutation(`/api/fleet/orders/${encodeURIComponent(orderId)}/items`, 'POST', {
-        items: created,
-      });
+      void (async () => {
+        pendingWritesRef.current += 1;
+        try {
+          const allOrderItems = [
+            ...created,
+            ...dbRef.current.items.filter((i) => i.order_id === orderId),
+          ];
+          const itemsMeta: Record<string, TicketItemMeta> = {};
+          for (const it of allOrderItems) {
+            itemsMeta[it.id] = {
+              category: it.category,
+              part_name: it.part_name,
+              quantity: it.quantity,
+              unit_price: it.unit_price,
+              amount: it.amount,
+            };
+          }
+          const encodedNote = encodeTicketNote(targetOrder.note, {
+            garage: targetOrder.garage,
+            service_type: targetOrder.service_type,
+            driver_name: targetOrder.driver_name,
+            service_interval_km: targetOrder.service_interval_km,
+            items: itemsMeta,
+          });
+
+          await supabase.from('maintenance_items').insert(
+            created.map((it) => ({
+              id: it.id,
+              ticket_id: orderId,
+              item_name: it.item_name,
+              action: it.action,
+              po_number: it.po_number,
+            }))
+          );
+          await supabase
+            .from('maintenance_tickets')
+            .update({ note: encodedNote, updated_at: now })
+            .eq('id', orderId);
+
+          await recordActivityLog(
+            'UPDATE',
+            'order',
+            `Gộp thêm ${created.length} hạng mục vào phiếu xe ${veh?.plate ?? targetOrder.vehicle_id} (${targetOrder.service_date})`,
+            `Giá trị thêm: ${formatVND(created.reduce((s, x) => s + x.amount, 0))}`
+          );
+        } finally {
+          pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+          await syncFromServer({ force: true });
+        }
+      })();
     },
-    [actorName, isAdmin, sendMutation]
+    [actorName, isAdmin, recordActivityLog, syncFromServer]
   );
 
   const deleteOrder = useCallback(
-    (orderId: string, actor = actorName) => {
+    (orderId: string, _actor = actorName) => {
       if (!isAdmin) return;
       const target = dbRef.current.orders.find((o) => o.id === orderId);
       if (!target) return;
@@ -1138,199 +1339,288 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
       const removedItems = dbRef.current.items.filter((i) => i.order_id === orderId);
       const total = removedItems.reduce((s, i) => s + i.amount, 0);
 
-      const log: AuditLogEntry = {
-        id: generateId('log'),
-        timestamp: new Date().toISOString(),
-        actor,
-        action: 'DELETE',
-        entity: 'order',
-        summary: `Xóa phiếu bảo dưỡng xe ${veh?.plate ?? ''} ngày ${target.service_date}`,
-        details: `${removedItems.length} hạng mục · ${formatVND(total)}`,
-      };
-
       setDb((prev) => ({
         ...prev,
         orders: prev.orders.filter((o) => o.id !== orderId),
         items: prev.items.filter((i) => i.order_id !== orderId),
-        auditLogs: [log, ...prev.auditLogs],
         lastUpdated: new Date().toISOString(),
       }));
 
-      void sendMutation(`/api/fleet/orders/${encodeURIComponent(orderId)}`, 'DELETE');
+      void (async () => {
+        pendingWritesRef.current += 1;
+        try {
+          await supabase.from('maintenance_items').delete().eq('ticket_id', orderId);
+          const { error } = await supabase.from('maintenance_tickets').delete().eq('id', orderId);
+          if (error) {
+            onSyncErrorRef.current?.(error.message || 'Không thể xóa phiếu bảo dưỡng.');
+          } else {
+            await recordActivityLog(
+              'DELETE',
+              'order',
+              `Xóa phiếu bảo dưỡng xe ${veh?.plate ?? target.vehicle_id} ngày ${target.service_date}`,
+              `${removedItems.length} hạng mục · ${formatVND(total)}`
+            );
+          }
+        } finally {
+          pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+          await syncFromServer({ force: true });
+        }
+      })();
     },
-    [actorName, isAdmin, sendMutation]
+    [actorName, isAdmin, recordActivityLog, syncFromServer]
   );
 
   const assignPoToItem = useCallback(
-    (itemId: string, poNumber: string, actor = actorName) => {
+    (itemId: string, poNumber: string, _actor = actorName) => {
       if (!isAdmin) return;
       const cleanPo = poNumber.trim().toUpperCase();
       const target = dbRef.current.items.find((i) => i.id === itemId);
       if (!target) return;
 
-      const log: AuditLogEntry = {
-        id: generateId('log'),
-        timestamp: new Date().toISOString(),
-        actor,
-        action: 'UPDATE',
-        entity: 'item',
-        summary: `Gán số PO "${cleanPo || 'Trống'}" cho hạng mục "${target.item_name}"`,
-        details: `Thành tiền: ${formatVND(target.amount)}`,
-      };
-
       setDb((prev) => ({
         ...prev,
         items: prev.items.map((i) => (i.id === itemId ? { ...i, po_number: cleanPo } : i)),
-        auditLogs: [log, ...prev.auditLogs],
         lastUpdated: new Date().toISOString(),
       }));
 
-      void sendMutation(`/api/fleet/items/${encodeURIComponent(itemId)}/po`, 'PATCH', {
-        poNumber: cleanPo,
-      });
+      void (async () => {
+        pendingWritesRef.current += 1;
+        try {
+          const { error } = await supabase
+            .from('maintenance_items')
+            .update({ po_number: cleanPo })
+            .eq('id', itemId);
+          if (error) {
+            onSyncErrorRef.current?.(error.message || 'Không thể cập nhật số PO.');
+          } else {
+            await recordActivityLog(
+              'UPDATE',
+              'item',
+              `Gán số PO "${cleanPo || 'Trống'}" cho hạng mục "${target.item_name}"`,
+              `Thành tiền: ${formatVND(target.amount)}`
+            );
+          }
+        } finally {
+          pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+          await syncFromServer({ force: true });
+        }
+      })();
     },
-    [actorName, isAdmin, sendMutation]
+    [actorName, isAdmin, recordActivityLog, syncFromServer]
   );
 
   const upsertImportRows = useCallback(
-    (rows: ParsedImportRow[], actor = actorName) => {
+    (rows: ParsedImportRow[], _actor = actorName) => {
       if (!isAdmin) return { inserted: 0, updated: 0, createdVehicles: 0 };
       const validRows = rows.filter((r) => r.status !== 'error');
       if (validRows.length === 0) return { inserted: 0, updated: 0, createdVehicles: 0 };
 
-      const now = new Date().toISOString();
       let inserted = 0;
       let updated = 0;
       let createdVehicles = 0;
 
-      setDb((prev) => {
-        const vehicles = [...prev.vehicles];
-        const orders = [...prev.orders];
-        const items = [...prev.items];
+      const vehiclesSnapshot = [...dbRef.current.vehicles];
+      const ordersSnapshot = [...dbRef.current.orders];
+      const itemsSnapshot = [...dbRef.current.items];
+      const vehByPlateKey = new Map(vehiclesSnapshot.map((v) => [v.plate_key, v]));
 
-        const vehByPlateKey = new Map(vehicles.map((v) => [v.plate_key, v]));
+      const vehiclesToCreate: Vehicle[] = [];
+      const touchedOrderIds = new Set<string>();
+      const newOrders: MaintenanceOrder[] = [];
+      const itemsToInsert: MaintenanceItem[] = [];
+      const itemsToUpdate: MaintenanceItem[] = [];
 
-        for (const row of validRows) {
-          let veh = vehByPlateKey.get(row.plate_key);
-          if (!veh) {
-            veh = {
-              id: generateId('veh'),
-              plate: row.plate,
-              plate_key: row.plate_key,
-              type: 'Xe bán tải',
-              brand_model: 'Chưa cập nhật',
-              driver_name: row.driver_name || 'Chưa phân công',
-              department: 'Văn Phòng HCM',
-              status: 'Đang hoạt động',
-              registration_due_date: addDaysISO(REFERENCE_TODAY, 180),
-              current_km: row.odometer_km || 0,
-              service_interval_km: 10000,
-              service_interval_days: 90,
-              next_service_km: row.odometer_km ? row.odometer_km + 10000 : 0,
-              next_service_date: addDaysISO(row.service_date || REFERENCE_TODAY, 90),
-            };
-            vehicles.push(veh);
-            vehByPlateKey.set(veh.plate_key, veh);
-            createdVehicles += 1;
-          } else if (row.odometer_km > veh.current_km) {
-            const idx = vehicles.findIndex((v) => v.id === veh!.id);
-            if (idx >= 0) {
-              vehicles[idx] = { ...vehicles[idx], current_km: row.odometer_km };
-              veh = vehicles[idx];
-              vehByPlateKey.set(veh.plate_key, veh);
+      for (const row of validRows) {
+        let veh = vehByPlateKey.get(row.plate_key);
+        if (!veh) {
+          veh = {
+            id: row.plate,
+            plate: row.plate,
+            plate_key: row.plate_key,
+            type: 'Xe bán tải',
+            brand_model: 'Chưa cập nhật',
+            driver_id: null,
+            driver_name: row.driver_name || 'Chưa phân công',
+            department: 'Văn Phòng HCM',
+            status: 'Đang hoạt động',
+            registration_due_date: addDaysISO(REFERENCE_TODAY, 180),
+            current_km: row.odometer_km || 0,
+            service_interval_km: 10000,
+            service_interval_days: 90,
+            next_service_km: row.odometer_km ? row.odometer_km + 10000 : 0,
+            next_service_date: addDaysISO(row.service_date || REFERENCE_TODAY, 90),
+          };
+          vehiclesSnapshot.push(veh);
+          vehiclesToCreate.push(veh);
+          vehByPlateKey.set(veh.plate_key, veh);
+          createdVehicles += 1;
+        }
+
+        let order = ordersSnapshot.find(
+          (o) =>
+            normalizePlateKey(o.vehicle_id) === veh!.plate_key &&
+            o.service_date === row.service_date
+        );
+        if (!order) {
+          order = {
+            id: createUuid(),
+            vehicle_id: veh.plate,
+            service_date: row.service_date,
+            odometer_km: row.odometer_km,
+            garage: row.garage,
+            driver_name: row.driver_name || veh.driver_name,
+            service_type: row.service_type,
+            note: row.note,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          ordersSnapshot.push(order);
+          newOrders.push(order);
+        } else {
+          order.odometer_km = row.odometer_km || order.odometer_km;
+          order.garage = row.garage || order.garage;
+          order.note = row.note || order.note;
+        }
+        touchedOrderIds.add(order.id);
+
+        const existingIdx = itemsSnapshot.findIndex(
+          (it) =>
+            it.order_id === order!.id &&
+            it.item_name.trim().toLowerCase() === row.item_name.trim().toLowerCase() &&
+            it.po_number.trim().toUpperCase() === row.po_number.trim().toUpperCase()
+        );
+
+        if (existingIdx >= 0) {
+          const updatedItem: MaintenanceItem = {
+            ...itemsSnapshot[existingIdx],
+            category: row.category,
+            action: row.action,
+            part_name: row.part_name,
+            quantity: row.quantity,
+            unit_price: row.unit_price,
+            amount: row.amount,
+          };
+          itemsSnapshot[existingIdx] = updatedItem;
+          itemsToUpdate.push(updatedItem);
+          updated += 1;
+        } else {
+          const createdItem: MaintenanceItem = {
+            id: createUuid(),
+            order_id: order.id,
+            category: row.category,
+            item_name: row.item_name,
+            action: row.action,
+            part_name: row.part_name,
+            quantity: row.quantity,
+            unit_price: row.unit_price,
+            amount: row.amount,
+            po_number: row.po_number,
+          };
+          itemsSnapshot.push(createdItem);
+          itemsToInsert.push(createdItem);
+          inserted += 1;
+        }
+      }
+
+      void (async () => {
+        pendingWritesRef.current += 1;
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          const userId = session?.user?.id ?? null;
+
+          if (vehiclesToCreate.length > 0) {
+            await supabase.from('vehicles').insert(
+              vehiclesToCreate.map((v) => ({
+                plate: v.plate,
+                vehicle_type: v.type,
+                brand_model: v.brand_model,
+                driver_id: null,
+                department: v.department,
+                status: v.status,
+                registration_expiry: v.registration_due_date || null,
+                service_interval_km: v.service_interval_km,
+              }))
+            );
+          }
+
+          for (const order of ordersSnapshot.filter((o) => touchedOrderIds.has(o.id))) {
+            const ordItems = itemsSnapshot.filter((i) => i.order_id === order.id);
+            const itemsMeta: Record<string, TicketItemMeta> = {};
+            for (const it of ordItems) {
+              itemsMeta[it.id] = {
+                category: it.category,
+                part_name: it.part_name,
+                quantity: it.quantity,
+                unit_price: it.unit_price,
+                amount: it.amount,
+              };
+            }
+            const encodedNote = encodeTicketNote(order.note, {
+              garage: order.garage,
+              service_type: order.service_type,
+              driver_name: order.driver_name,
+              items: itemsMeta,
+            });
+            const isNew = newOrders.some((n) => n.id === order.id);
+            if (isNew) {
+              await supabase.from('maintenance_tickets').insert({
+                id: order.id,
+                plate: order.vehicle_id,
+                service_date: order.service_date,
+                odometer_km: order.odometer_km,
+                note: encodedNote,
+                created_by: userId,
+              });
+            } else {
+              await supabase
+                .from('maintenance_tickets')
+                .update({
+                  odometer_km: order.odometer_km,
+                  note: encodedNote,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', order.id);
             }
           }
 
-          let order = orders.find(
-            (o) => o.vehicle_id === veh!.id && o.service_date === row.service_date
-          );
-          if (!order) {
-            order = {
-              id: generateId('ord'),
-              vehicle_id: veh.id,
-              service_date: row.service_date,
-              odometer_km: row.odometer_km,
-              garage: row.garage,
-              driver_name: row.driver_name || veh.driver_name,
-              service_type: row.service_type,
-              note: row.note,
-              created_at: now,
-              updated_at: now,
-            };
-            orders.push(order);
-          } else {
-            const oIdx = orders.findIndex((o) => o.id === order!.id);
-            orders[oIdx] = {
-              ...order,
-              odometer_km: row.odometer_km || order.odometer_km,
-              garage: row.garage || order.garage,
-              note: row.note || order.note,
-              updated_at: now,
-            };
-            order = orders[oIdx];
+          if (itemsToInsert.length > 0) {
+            await supabase.from('maintenance_items').insert(
+              itemsToInsert.map((it) => ({
+                id: it.id,
+                ticket_id: it.order_id,
+                item_name: it.item_name,
+                action: it.action,
+                po_number: it.po_number,
+              }))
+            );
           }
 
-          const existingIdx = items.findIndex(
-            (it) =>
-              it.order_id === order!.id &&
-              it.item_name.trim().toLowerCase() === row.item_name.trim().toLowerCase() &&
-              it.po_number.trim().toUpperCase() === row.po_number.trim().toUpperCase()
-          );
-
-          if (existingIdx >= 0) {
-            items[existingIdx] = {
-              ...items[existingIdx],
-              category: row.category,
-              action: row.action,
-              part_name: row.part_name,
-              quantity: row.quantity,
-              unit_price: row.unit_price,
-              amount: row.amount,
-            };
-            updated += 1;
-          } else {
-            items.push({
-              id: generateId('it'),
-              order_id: order.id,
-              category: row.category,
-              item_name: row.item_name,
-              action: row.action,
-              part_name: row.part_name,
-              quantity: row.quantity,
-              unit_price: row.unit_price,
-              amount: row.amount,
-              po_number: row.po_number,
-            });
-            inserted += 1;
+          for (const it of itemsToUpdate) {
+            await supabase
+              .from('maintenance_items')
+              .update({ action: it.action, po_number: it.po_number })
+              .eq('id', it.id);
           }
-        }
 
-        const log: AuditLogEntry = {
-          id: generateId('log'),
-          timestamp: now,
-          actor,
-          action: 'IMPORT',
-          entity: 'system',
-          summary: `Nhập Excel/CSV (UPSERT): thêm mới ${inserted}, cập nhật ${updated} hạng mục`,
-          details:
+          await recordActivityLog(
+            'IMPORT',
+            'system',
+            `Nhập Excel/CSV (UPSERT): thêm mới ${inserted}, cập nhật ${updated} hạng mục`,
             createdVehicles > 0
               ? `Tự động tạo thêm ${createdVehicles} xe mới chưa có trong danh mục`
-              : 'Khớp hoàn toàn với danh sách xe hiện có',
-        };
+              : 'Khớp hoàn toàn với danh sách xe hiện có'
+          );
+        } finally {
+          pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+          await syncFromServer({ force: true });
+        }
+      })();
 
-        return {
-          vehicles,
-          orders,
-          items,
-          auditLogs: [log, ...prev.auditLogs],
-          lastUpdated: now,
-        };
-      });
-
-      void sendMutation('/api/fleet/import', 'POST', { rows: validRows });
       return { inserted, updated, createdVehicles };
     },
-    [actorName, isAdmin, sendMutation]
+    [actorName, isAdmin, recordActivityLog, syncFromServer]
   );
 
   return {
@@ -1358,6 +1648,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
     addVehicle,
     bulkAddPlates,
     updateVehicle,
+    deleteVehicle,
     saveOrder,
     appendItemsToExistingOrder,
     deleteOrder,

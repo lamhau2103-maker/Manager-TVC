@@ -16,9 +16,10 @@ import {
   formatShortMonth,
   getMonthDateRange,
   getPreviousMonth,
+  REFERENCE_TODAY,
 } from './format';
 import { normalizePlateKey } from './plate';
-import { REFERENCE_TODAY } from '../data/seedData';
+
 
 export interface DateRange {
   start: string;

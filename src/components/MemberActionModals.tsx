@@ -74,7 +74,7 @@ export const CreateMemberModal: React.FC<CreateMemberModalProps> = ({
         username: rawId,
         password,
         full_name: vehicle.driver_name,
-        vehicle_id: vehicle.id,
+        vehicle_plate: vehicle.plate,
       });
 
       if (error || (data && typeof data === 'object' && 'error' in data && data.error)) {
@@ -334,15 +334,14 @@ export const TransferMemberModal: React.FC<TransferMemberModalProps> = ({
       // 1. Clear previous vehicle driver_id for this member
       await supabase.from('vehicles').update({ driver_id: null }).eq('driver_id', member.id);
 
-      // 2. Set driver_id on target vehicle if selected
-      if (selectedVehicleId) {
+      // 2. Set driver_id on target vehicle using PK `plate`
+      if (selectedPlate) {
         const { error: vError } = await supabase
           .from('vehicles')
           .update({
             driver_id: member.id,
-            driver_name: trimmedName,
           })
-          .eq('id', selectedVehicleId);
+          .eq('plate', selectedPlate);
 
         if (vError) {
           setErrorMsg(vError.message || 'Không thể cập nhật xe đích.');
@@ -919,7 +918,7 @@ interface VehicleMembersCardProps {
   loading: boolean;
   loadError: string | null;
   compact?: boolean;
-  onCreateClick: () => void;
+  onCreateClick?: () => void;
   onTransferClick: (m: MemberProfileRow) => void;
   onResetPwdClick: (m: MemberProfileRow) => void;
   onDeleteClick: (m: MemberProfileRow) => void;
@@ -960,7 +959,7 @@ export const VehicleMembersCard: React.FC<VehicleMembersCardProps> = ({
           </div>
         </div>
 
-        {!loading && members.length === 0 && (
+        {onCreateClick && !loading && members.length === 0 && (
           <button
             type="button"
             onClick={onCreateClick}
@@ -983,7 +982,10 @@ export const VehicleMembersCard: React.FC<VehicleMembersCardProps> = ({
         </div>
       ) : members.length === 0 ? (
         <div className="p-3 rounded-xl bg-white/55 border border-white/80 text-xs text-slate-600 flex flex-wrap items-center justify-between gap-2">
-          <span>Xe này chưa có tài khoản thành viên nào được gắn.</span>
+          <span>
+            Xe này chưa có tài khoản thành viên nào được gắn. Tạo tài khoản thành viên trong mục{' '}
+            <strong>Cài đặt &amp; Nhật ký</strong> rồi chọn tại <strong>Tài xế phụ trách</strong>.
+          </span>
         </div>
       ) : (
         <div className="space-y-2.5">

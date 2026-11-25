@@ -33,8 +33,8 @@ import {
   formatDateVN,
   formatKm,
   formatVND,
+  REFERENCE_TODAY,
 } from '../utils/format';
-import { REFERENCE_TODAY } from '../data/seedData';
 import { PlateInput } from './PlateInput';
 
 interface DraftItem {

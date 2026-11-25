@@ -1,24 +1,32 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowRightLeft,
   Database,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   History,
   KeyRound,
   Loader2,
   RefreshCw,
-  RotateCcw,
   Search,
   Trash2,
   Upload,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import { AuditLogEntry, Vehicle } from '../types';
 import { formatDateTimeVN, formatDateVN } from '../utils/format';
 import { buildDepartmentOptions } from '../utils/departments';
 import { normalizePlateKey } from '../utils/plate';
-import { fetchAllMemberProfiles, MemberProfileRow } from '../utils/memberActions';
+import {
+  extractFunctionError,
+  fetchAllMemberProfiles,
+  invokeAdminUsers,
+  MemberProfileRow,
+} from '../utils/memberActions';
 import { VietnamesePlateBadge } from './PlateInput';
 import {
   DeleteMemberModal,
@@ -40,6 +48,8 @@ interface SettingsAuditViewProps {
     updates: Partial<Omit<Vehicle, 'id' | 'plate_key'>>,
     opts?: { silent?: boolean }
   ) => { ok: boolean; error?: string };
+  onDeleteVehicle?: (vehicleId: string) => Promise<{ ok: boolean; error?: string }>;
+  onRefreshFleet?: () => void;
   onNotify?: (msg: string) => void;
 }
 
@@ -53,11 +63,13 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
   onOpenImport,
   onExportExcel,
   onUpdateVehicle,
+  onDeleteVehicle,
+  onRefreshFleet,
   onNotify,
 }) => {
   const [filterAction, setFilterAction] = useState<'ALL' | AuditLogEntry['action']>('ALL');
 
-  // Admin-only Group B: Member Management state
+  // Admin-only Member Management state
   const [members, setMembers] = useState<MemberProfileRow[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersError, setMembersError] = useState<string | null>(null);
@@ -66,6 +78,21 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
   const [transferTarget, setTransferTarget] = useState<MemberProfileRow | null>(null);
   const [resetPwdTarget, setResetPwdTarget] = useState<MemberProfileRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MemberProfileRow | null>(null);
+
+  // Admin-only Create Member Account state (moved from Add Vehicle modal to Settings)
+  // Exact field order: 1. Họ tên tài xế, 2. ID Đăng nhập, 3. Mật khẩu, 4. Nhập lại mật khẩu
+  const [newDriverName, setNewDriverName] = useState('');
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newConfirmPassword, setNewConfirmPassword] = useState('');
+  const [showNewPwd, setShowNewPwd] = useState(false);
+  const [showNewConfirmPwd, setShowNewConfirmPwd] = useState(false);
+  const [creatingMember, setCreatingMember] = useState(false);
+  const [createMemberError, setCreateMemberError] = useState('');
+
+  // Admin-only 2-step purge all vehicles + members
+  const [purgeConfirmStep, setPurgeConfirmStep] = useState<0 | 1 | 2>(0);
+  const [purgingAll, setPurgingAll] = useState(false);
 
   const departmentOptions = useMemo(() => buildDepartmentOptions(vehicles), [vehicles]);
 
@@ -92,6 +119,106 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
       loadMembers();
     }
   }, [isAdmin, loadMembers]);
+
+  const handleCreateMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin || creatingMember) return;
+    setCreateMemberError('');
+
+    const cleanFullName = newDriverName.trim();
+    const cleanId = newUsername.trim().toLowerCase();
+
+    if (!cleanFullName) {
+      setCreateMemberError('Vui lòng nhập họ tên tài xế.');
+      return;
+    }
+    if (!/^[a-z0-9._-]{3,30}$/.test(cleanId)) {
+      setCreateMemberError(
+        'ID đăng nhập phải từ 3–30 ký tự, chỉ gồm chữ thường (a-z), số (0-9) và dấu . _ -'
+      );
+      return;
+    }
+    if (newPassword.length < 8) {
+      setCreateMemberError('Mật khẩu phải có tối thiểu 8 ký tự.');
+      return;
+    }
+    if (newPassword !== newConfirmPassword) {
+      setCreateMemberError('Nhập lại mật khẩu chưa khớp với mật khẩu.');
+      return;
+    }
+
+    setCreatingMember(true);
+    try {
+      const { data, error } = await invokeAdminUsers({
+        action: 'create',
+        username: cleanId,
+        password: newPassword,
+        full_name: cleanFullName,
+        vehicle_plate: null,
+      });
+
+      if (error || (data && typeof data === 'object' && 'error' in data && (data as { error?: unknown }).error)) {
+        const msg = await extractFunctionError(error, data);
+        setCreateMemberError(msg);
+        setCreatingMember(false);
+        return;
+      }
+
+      setNewDriverName('');
+      setNewUsername('');
+      setNewPassword('');
+      setNewConfirmPassword('');
+      setShowNewPwd(false);
+      setShowNewConfirmPwd(false);
+      setCreatingMember(false);
+      await loadMembers();
+      onRefreshFleet?.();
+      onNotify?.(`Đã tạo tài khoản thành viên ${cleanId} (${cleanFullName})`);
+    } catch (err) {
+      const msg = await extractFunctionError(err);
+      setCreateMemberError(msg);
+      setCreatingMember(false);
+    }
+  };
+
+  const handlePurgeAllData = async () => {
+    if (!isAdmin || purgingAll) return;
+    if (purgeConfirmStep < 2) {
+      setPurgeConfirmStep((s) => (s === 0 ? 1 : 2));
+      return;
+    }
+    setPurgingAll(true);
+    try {
+      const errors: string[] = [];
+      for (const m of members) {
+        const { data, error } = await invokeAdminUsers({
+          action: 'delete',
+          member_id: m.id,
+        });
+        if (error || (data && typeof data === 'object' && 'error' in data && (data as { error?: unknown }).error)) {
+          errors.push(`${m.username}: ${await extractFunctionError(error, data)}`);
+        }
+      }
+      if (onDeleteVehicle) {
+        for (const v of vehicles) {
+          const res = await onDeleteVehicle(v.id);
+          if (!res.ok && res.error) {
+            errors.push(`${v.plate}: ${res.error}`);
+          }
+        }
+      }
+      await loadMembers();
+      onRefreshFleet?.();
+      setPurgeConfirmStep(0);
+      if (errors.length > 0) {
+        setMembersError(errors[0]);
+      } else {
+        onNotify?.('Đã xóa toàn bộ xe, phiếu bảo dưỡng và tài khoản thành viên trên Supabase.');
+      }
+    } finally {
+      setPurgingAll(false);
+    }
+  };
 
   const enrichedMembers = useMemo(() => {
     return members.map((m) => {
@@ -154,7 +281,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                 Nguồn dữ liệu & Kiến trúc 3 bảng quan hệ
               </h3>
               <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-                Đồng bộ dữ liệu thời gian thực lên Supabase Realtime giữa mọi thiết bị, kèm bộ nhớ đệm cục bộ để phản hồi tức thì
+                Đồng bộ dữ liệu thời gian thực trực tiếp trên Supabase Realtime giữa mọi thiết bị
               </p>
             </div>
           </div>
@@ -194,7 +321,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
           <div>
             <h3 className="fluid-section-title font-bold text-slate-900">Thao tác dữ liệu</h3>
             <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-              Nhập hàng loạt từ Excel/CSV (UPSERT), xuất sao lưu hoặc đặt lại dữ liệu mẫu ban đầu.
+              Nhập hàng loạt từ Excel/CSV (UPSERT) hoặc xuất sao lưu dữ liệu ra Excel.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -214,13 +341,59 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
               <FileSpreadsheet className="w-3.5 h-3.5" />
               Xuất sao lưu Excel
             </button>
-
-
+            {isAdmin && (vehicles.length > 0 || members.length > 0) && (
+              <button
+                type="button"
+                disabled={purgingAll}
+                onClick={handlePurgeAllData}
+                className={`inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors touch-press ${
+                  purgeConfirmStep === 0
+                    ? 'bg-red-50/90 hover:bg-red-100 text-red-700 border border-red-200'
+                    : 'bg-red-600 hover:bg-red-700 text-white'
+                }`}
+              >
+                {purgingAll ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Đang xóa...
+                  </>
+                ) : purgeConfirmStep === 2 ? (
+                  <>
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Xác nhận lần 2: Xóa sạch ngay
+                  </>
+                ) : purgeConfirmStep === 1 ? (
+                  <>
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Bấm tiếp để xác nhận xóa tất cả
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Xóa toàn bộ xe & tài khoản
+                  </>
+                )}
+              </button>
+            )}
           </div>
+          {purgeConfirmStep > 0 && !purgingAll && (
+            <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-red-50/90 border border-red-200 text-[11px] font-semibold text-red-800">
+              <span>
+                Thao tác này sẽ xóa vĩnh viễn toàn bộ {vehicles.length} xe, {orderCount} phiếu và {members.length} tài khoản thành viên trên Supabase.
+              </span>
+              <button
+                type="button"
+                onClick={() => setPurgeConfirmStep(0)}
+                className="px-2.5 py-1 rounded-lg bg-white text-slate-700 border border-slate-200 shrink-0"
+              >
+                Hủy
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Admin-only Group B: Member Management Table */}
+      {/* Admin-only Member Management + Create Member Account Section */}
       {isAdmin && (
         <div className="glass-panel rounded-2xl overflow-hidden">
           <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-white/70 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -233,13 +406,12 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                   Quản lý thành viên ({members.length})
                 </h3>
                 <p className="text-xs text-slate-500 leading-relaxed">
-                  Toàn bộ tài khoản thành viên (role = user), bao gồm điều chuyển xe, đặt lại mật khẩu và xóa tài khoản
+                  Tạo mới và quản lý toàn bộ tài khoản thành viên (role = user), bao gồm điều chuyển xe, đặt lại mật khẩu và xóa tài khoản
                 </p>
               </div>
             </div>
 
             <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2">
-              {/* Search by ID or plate */}
               <div className="relative w-full sm:w-56">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
@@ -252,7 +424,6 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
               </div>
 
               <div className="flex items-center gap-2">
-                {/* Filter by Department using Group A ordered list */}
                 <select
                   value={memberDeptFilter}
                   onChange={(e) => setMemberDeptFilter(e.target.value)}
@@ -280,6 +451,160 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Create New Member Account Form (Exact order: Họ tên tài xế, ID Đăng nhập, Mật khẩu, Nhập lại mật khẩu) */}
+          <form
+            onSubmit={handleCreateMember}
+            className="mx-4 sm:mx-5 my-4 p-4 rounded-2xl glass-tile border border-blue-200/75 bg-linear-to-br from-blue-50/55 via-white/55 to-sky-50/45 space-y-3"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
+                  <UserPlus className="w-4 h-4 text-blue-600 shrink-0" />
+                  Tài khoản thành viên
+                </div>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  Tạo tài khoản tài xế mới. Họ tên tài xế sau khi tạo sẽ tự động xuất hiện trong danh sách "Tài xế phụ trách" khi thêm xe mới.
+                </p>
+              </div>
+            </div>
+
+            {createMemberError && (
+              <div className="p-2.5 rounded-xl bg-red-50/90 border border-red-200 text-red-800 text-xs font-semibold flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <span>{createMemberError}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* 1. Họ tên tài xế */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                  Họ tên tài xế *
+                </label>
+                <input
+                  type="text"
+                  value={newDriverName}
+                  onChange={(e) => {
+                    setNewDriverName(e.target.value);
+                    if (createMemberError) setCreateMemberError('');
+                  }}
+                  placeholder="Nhập họ và tên tài xế"
+                  autoComplete="off"
+                  disabled={creatingMember}
+                  className="glass-input w-full min-h-[42px] sm:h-10 px-3 rounded-xl text-xs text-slate-900"
+                />
+              </div>
+
+              {/* 2. ID Đăng nhập */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                  ID Đăng nhập *
+                </label>
+                <input
+                  type="text"
+                  value={newUsername}
+                  onChange={(e) => {
+                    setNewUsername(e.target.value);
+                    if (createMemberError) setCreateMemberError('');
+                  }}
+                  placeholder="vd: 00446 hoặc taixe_01"
+                  autoComplete="off"
+                  disabled={creatingMember}
+                  className="glass-input w-full min-h-[42px] sm:h-10 px-3 rounded-xl text-xs font-mono text-slate-900"
+                />
+                <div className="text-[10px] text-slate-500 mt-1">
+                  3–30 ký tự: a-z, 0-9, dấu . _ -
+                </div>
+              </div>
+
+              {/* 3. Mật khẩu */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                  Mật khẩu *
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewPwd ? 'text' : 'password'}
+                    value={newPassword}
+                    onChange={(e) => {
+                      setNewPassword(e.target.value);
+                      if (createMemberError) setCreateMemberError('');
+                    }}
+                    placeholder="Tối thiểu 8 ký tự"
+                    autoComplete="new-password"
+                    disabled={creatingMember}
+                    className="glass-input w-full min-h-[42px] sm:h-10 pl-3 pr-9 rounded-xl text-xs text-slate-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPwd((p) => !p)}
+                    title={showNewPwd ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                  >
+                    {showNewPwd ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* 4. Nhập lại mật khẩu */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                  Nhập lại mật khẩu *
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewConfirmPwd ? 'text' : 'password'}
+                    value={newConfirmPassword}
+                    onChange={(e) => {
+                      setNewConfirmPassword(e.target.value);
+                      if (createMemberError) setCreateMemberError('');
+                    }}
+                    placeholder="Nhập lại mật khẩu"
+                    autoComplete="new-password"
+                    disabled={creatingMember}
+                    className="glass-input w-full min-h-[42px] sm:h-10 pl-3 pr-9 rounded-xl text-xs text-slate-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewConfirmPwd((p) => !p)}
+                    title={showNewConfirmPwd ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                  >
+                    {showNewConfirmPwd ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="submit"
+                disabled={creatingMember}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 min-h-[42px] sm:min-h-[38px] px-4 py-2 rounded-xl glass-button-primary text-white text-xs font-bold disabled:opacity-65 touch-press"
+              >
+                {creatingMember ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Đang tạo tài khoản...
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="w-3.5 h-3.5" />
+                    Thêm tài khoản thành viên
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
 
           {membersError && (
             <div className="mx-4 sm:mx-5 my-3 p-3 rounded-xl bg-red-50/90 border border-red-200 text-xs font-semibold text-red-700">
@@ -588,6 +913,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
           </table>
         </div>
       </div>
+
       {/* Admin-only Member Action Modals */}
       {isAdmin && transferTarget && (
         <TransferMemberModal
@@ -599,12 +925,13 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
             if (targetVehicleId && nextDriverName) {
               onUpdateVehicle?.(
                 targetVehicleId,
-                { driver_name: nextDriverName },
+                { driver_id: transferTarget.id, driver_name: nextDriverName },
                 { silent: true }
               );
             }
             setTransferTarget(null);
             loadMembers();
+            onRefreshFleet?.();
             onNotify?.(`Đã chuyển tài khoản ${memberId} sang xe ${targetPlate}`);
           }}
         />
@@ -628,6 +955,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
           onSuccess={(memberId) => {
             setDeleteTarget(null);
             loadMembers();
+            onRefreshFleet?.();
             onNotify?.(`Đã xóa vĩnh viễn tài khoản ${memberId}`);
           }}
         />
