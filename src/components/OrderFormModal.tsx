@@ -36,6 +36,7 @@ import {
   REFERENCE_TODAY,
 } from '../utils/format';
 import { PlateInput } from './PlateInput';
+import { isVehicleAssignedToUser } from '../utils/plate';
 
 interface DraftItem {
   localId: string;
@@ -160,11 +161,23 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
   onSaveOrder,
   onAppendToExistingOrder,
 }) => {
-  const { isAdmin: authIsAdmin, driverName: authDriverName } = useAuth();
+  const {
+    user,
+    profile,
+    isAdmin: authIsAdmin,
+    driverName: authDriverName,
+  } = useAuth();
   const effectiveIsAdmin = isAdmin || authIsAdmin;
   const lockedUserDriverName =
     !effectiveIsAdmin && !editingOrder && authDriverName.trim() ? authDriverName.trim() : '';
   const isDriverLocked = Boolean(lockedUserDriverName);
+
+  const assignedVehicles = useMemo(() => {
+    if (effectiveIsAdmin) return vehicles;
+    return vehicles.filter((v) =>
+      isVehicleAssignedToUser(v, user?.id ?? null, profile?.vehicle_plate ?? null)
+    );
+  }, [effectiveIsAdmin, vehicles, user?.id, profile?.vehicle_plate]);
 
   const [serviceDate, setServiceDate] = useState(REFERENCE_TODAY);
   const [plateText, setPlateText] = useState('');
@@ -228,11 +241,30 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       return;
     }
 
-    // New order: NEVER auto-fill or auto-select vehicle plate for any role
-    setPlateText('');
-    setSelectedVehicleId('');
-    setOdometerKm('');
-    setServiceIntervalKm('10000');
+    // New order for member: strictly pre-select & constrain to assigned vehicle(s)
+    if (!effectiveIsAdmin) {
+      const preMatched = preselectedVehicleId
+        ? assignedVehicles.find((v) => v.id === preselectedVehicleId)
+        : undefined;
+      const targetVeh = preMatched ?? assignedVehicles[0] ?? null;
+
+      if (targetVeh) {
+        setPlateText(targetVeh.plate);
+        setSelectedVehicleId(targetVeh.id);
+        setOdometerKm(targetVeh.current_km > 0 ? String(targetVeh.current_km) : '');
+        setServiceIntervalKm(String(targetVeh.service_interval_km || 10000));
+      } else {
+        setPlateText('');
+        setSelectedVehicleId('');
+        setOdometerKm('');
+        setServiceIntervalKm('10000');
+      }
+    } else {
+      setPlateText('');
+      setSelectedVehicleId('');
+      setOdometerKm('');
+      setServiceIntervalKm('10000');
+    }
     setDriverName(isDriverLocked ? lockedUserDriverName : '');
     setServiceDate(REFERENCE_TODAY);
     setServiceType('Định kỳ');
@@ -240,7 +272,16 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
     setTotalOrderAmountInput('');
     setNote('');
     setDraftItems([createEmptyDraftItem()]);
-  }, [isOpen, editingOrder, vehicles, isDriverLocked, lockedUserDriverName, preselectedVehicleId]);
+  }, [
+    isOpen,
+    editingOrder,
+    vehicles,
+    assignedVehicles,
+    effectiveIsAdmin,
+    isDriverLocked,
+    lockedUserDriverName,
+    preselectedVehicleId,
+  ]);
 
   // Keep locked driver name synchronized if vehicle data updates while modal is open
   useEffect(() => {
@@ -325,6 +366,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
   if (!isOpen) return null;
   if (!effectiveIsAdmin && editingOrder) return null;
+  if (effectiveIsAdmin && !editingOrder) return null;
 
   const handleVehicleSelected = (veh: Vehicle) => {
     setSelectedVehicleId(veh.id);
@@ -382,15 +424,29 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
   const validateDraft = (): boolean => {
     setErrorMsg('');
+    if (effectiveIsAdmin && !editingOrder) {
+      setErrorMsg('Admin không có quyền thêm/lập phiếu bảo dưỡng mới.');
+      return false;
+    }
     if (!serviceDate) {
       setErrorMsg('Vui lòng chọn ngày bảo dưỡng.');
       return false;
     }
-    if (!selectedVehicleId) {
+    if (!effectiveIsAdmin) {
+      if (assignedVehicles.length === 0) {
+        setErrorMsg(
+          'Tài khoản của bạn chưa được gắn phụ trách biển số xe nào. Vui lòng liên hệ Quản trị viên.'
+        );
+        return false;
+      }
+      const isAssignedSelected = assignedVehicles.some((v) => v.id === selectedVehicleId);
+      if (!selectedVehicleId || !isAssignedSelected) {
+        setErrorMsg('Bạn chỉ được thêm/lập phiếu cho biển số xe đang phụ trách.');
+        return false;
+      }
+    } else if (!selectedVehicleId) {
       setErrorMsg(
-        effectiveIsAdmin
-          ? 'Vui lòng chọn biển số xe từ danh sách đã nạp (hoặc dùng nút "Admin: Nạp danh sách biển số").'
-          : 'Vui lòng chọn biển số xe từ danh sách phương tiện.'
+        'Vui lòng chọn biển số xe từ danh sách đã nạp (hoặc dùng nút "Admin: Nạp danh sách biển số").'
       );
       return false;
     }
@@ -414,6 +470,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (effectiveIsAdmin && !editingOrder) return;
     if (!validateDraft()) return;
 
     const validDrafts = draftItems.filter((it) => it.item_name.trim().length > 0);
@@ -542,6 +599,15 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
             <div className="p-3.5 rounded-2xl bg-red-50/85 backdrop-blur-md border border-red-200/90 text-red-900 text-xs font-semibold flex items-start gap-2.5 shadow-xs">
               <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {!effectiveIsAdmin && assignedVehicles.length === 0 && (
+            <div className="p-3.5 rounded-2xl bg-amber-50/90 backdrop-blur-md border border-amber-300/90 text-amber-950 text-xs font-semibold flex items-start gap-2.5 shadow-xs">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                Tài khoản của bạn chưa được gắn phụ trách biển số xe nào nên chưa thể lập phiếu bảo dưỡng. Vui lòng liên hệ Quản trị viên để được phân công xe.
+              </span>
             </div>
           )}
 
@@ -687,27 +753,91 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
                 {/* 2. Biển số xe */}
                 <div className="lg:col-span-4 min-w-0">
-                  <PlateInput
-                    id="order-plate-input"
-                    label={`Biển số xe * (${vehicles.length} xe đã nạp)`}
-                    vehicles={vehicles}
-                    value={plateText}
-                    autoFocus={!editingOrder && typeof window !== 'undefined' && window.innerWidth >= 768}
-                    showPlatePreview={false}
-                    showAllSuggestions
-                    allowQuickCreate={effectiveIsAdmin}
-                    onQuickCreateVehicle={effectiveIsAdmin ? onQuickCreateVehicle : undefined}
-                    placeholder="Bấm để xổ danh sách hoặc gõ biển số..."
-                    onChange={(plate, matched) => {
-                      setPlateText(plate);
-                      if (matched) {
-                        handleVehicleSelected(matched);
-                      } else {
-                        setSelectedVehicleId('');
-                      }
-                    }}
-                    onSelectVehicle={handleVehicleSelected}
-                  />
+                  {effectiveIsAdmin ? (
+                    <PlateInput
+                      id="order-plate-input"
+                      label={`Biển số xe * (${vehicles.length} xe đã nạp)`}
+                      vehicles={vehicles}
+                      value={plateText}
+                      autoFocus={!editingOrder && typeof window !== 'undefined' && window.innerWidth >= 768}
+                      showPlatePreview={false}
+                      showAllSuggestions
+                      allowQuickCreate={effectiveIsAdmin}
+                      onQuickCreateVehicle={effectiveIsAdmin ? onQuickCreateVehicle : undefined}
+                      placeholder="Bấm để xổ danh sách hoặc gõ biển số..."
+                      onChange={(plate, matched) => {
+                        setPlateText(plate);
+                        if (matched) {
+                          handleVehicleSelected(matched);
+                        } else {
+                          setSelectedVehicleId('');
+                        }
+                      }}
+                      onSelectVehicle={handleVehicleSelected}
+                    />
+                  ) : assignedVehicles.length === 1 ? (
+                    <div>
+                      <label
+                        htmlFor="order-plate-locked"
+                        className="flex items-center justify-between gap-1 text-xs font-semibold text-slate-700 mb-1.5 whitespace-nowrap"
+                      >
+                        <span>Biển số xe *</span>
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500">
+                          <Lock className="w-3 h-3" />
+                          Xe phụ trách
+                        </span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          id="order-plate-locked"
+                          type="text"
+                          value={assignedVehicles[0].plate}
+                          readOnly
+                          className="glass-input w-full h-11 px-3 pr-9 rounded-xl font-mono text-sm font-extrabold tracking-wider text-blue-900 bg-slate-100/75! cursor-not-allowed select-none"
+                        />
+                        <Lock
+                          className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                          aria-hidden="true"
+                        />
+                      </div>
+                    </div>
+                  ) : assignedVehicles.length > 1 ? (
+                    <div>
+                      <label
+                        htmlFor="order-plate-select"
+                        className="flex items-center justify-between gap-1 text-xs font-semibold text-slate-700 mb-1.5 whitespace-nowrap"
+                      >
+                        <span>Biển số xe * ({assignedVehicles.length} xe phụ trách)</span>
+                      </label>
+                      <select
+                        id="order-plate-select"
+                        value={selectedVehicleId}
+                        onChange={(e) => {
+                          const found = assignedVehicles.find((v) => v.id === e.target.value);
+                          if (found) {
+                            handleVehicleSelected(found);
+                          }
+                        }}
+                        className="glass-input w-full h-11 px-3 rounded-xl font-mono text-xs font-bold text-slate-900"
+                      >
+                        {assignedVehicles.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.plate} — {v.brand_model}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5 whitespace-nowrap">
+                        Biển số xe *
+                      </label>
+                      <div className="glass-input w-full h-11 px-3 rounded-xl text-xs font-semibold text-amber-800 bg-amber-50/70! flex items-center gap-1.5">
+                        <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span className="truncate">Chưa gắn biển số xe phụ trách</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* 3. Số km hiện tại */}
@@ -1160,7 +1290,12 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
             </button>
             <button
               type="submit"
-              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] px-5 py-2.5 rounded-xl glass-button-primary text-white text-xs font-bold transition-all touch-press"
+              disabled={!effectiveIsAdmin && assignedVehicles.length === 0}
+              className={`flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] px-5 py-2.5 rounded-xl text-white text-xs font-bold transition-all touch-press ${
+                !effectiveIsAdmin && assignedVehicles.length === 0
+                  ? 'bg-slate-400 cursor-not-allowed opacity-70'
+                  : 'glass-button-primary'
+              }`}
             >
               <Save className="w-4 h-4 shrink-0" />
               <span>{editingOrder ? 'Lưu thay đổi' : 'Lưu phiếu bảo dưỡng'}</span>

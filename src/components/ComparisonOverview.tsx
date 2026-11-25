@@ -23,7 +23,8 @@ interface ComparisonOverviewProps {
   prevLabel: string;
   vehicleStatuses: MonthlyVehicleStatusRow[];
   onOpenVehicle: (vehicleId: string, plate?: string) => void;
-  onOpenNewOrderForVehicle: (vehicleId: string) => void;
+  onOpenNewOrderForVehicle?: (vehicleId: string) => void;
+  canCreateOrder?: boolean;
   isAdminMode?: boolean;
   onToggleBlock?: (block: DashboardBlockId) => void;
 }
@@ -35,6 +36,7 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
   vehicleStatuses,
   onOpenVehicle,
   onOpenNewOrderForVehicle,
+  canCreateOrder = false,
   isAdminMode = false,
   onToggleBlock,
 }) => {
@@ -256,14 +258,16 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
                       </span>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => onOpenNewOrderForVehicle(v.id)}
-                      className="w-full min-h-[40px] sm:min-h-[34px] inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-blue-600/90 hover:bg-blue-700 text-white text-[11px] font-semibold transition-colors touch-press"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Lập phiếu ngay
-                    </button>
+                    {canCreateOrder && onOpenNewOrderForVehicle && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenNewOrderForVehicle(v.id)}
+                        className="w-full min-h-[40px] sm:min-h-[34px] inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-blue-600/90 hover:bg-blue-700 text-white text-[11px] font-semibold transition-colors touch-press"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Lập phiếu ngay
+                      </button>
+                    )}
                   </div>
                 )}
 

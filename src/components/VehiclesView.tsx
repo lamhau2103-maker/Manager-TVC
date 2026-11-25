@@ -42,6 +42,7 @@ import {
   REFERENCE_TODAY,
 } from '../utils/format';
 import { PlateInput, VietnamesePlateBadge } from './PlateInput';
+import { isVehicleAssignedToUser } from '../utils/plate';
 import { OrdersTable } from './OrdersTable';
 import {
   buildDepartmentOptions,
@@ -69,6 +70,8 @@ interface VehiclesViewProps {
   allItems: MaintenanceItem[];
   selectedVehicleId: string | null;
   isAdmin: boolean;
+  currentUserId?: string | null;
+  assignedVehiclePlate?: string | null;
   onSelectVehicle: (vehicleId: string | null) => void;
   onAddVehicle: (
     payload: Omit<Vehicle, 'id' | 'plate_key'>,
@@ -129,6 +132,8 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
   allItems,
   selectedVehicleId,
   isAdmin,
+  currentUserId = null,
+  assignedVehiclePlate = null,
   onSelectVehicle,
   onAddVehicle,
   onUpdateVehicle,
@@ -418,6 +423,10 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
   }, [activeVehicle, allOrders, itemsByOrder]);
 
   if (activeVehicle && profileData) {
+    const canCreateOrderForActiveVehicle =
+      !isAdmin &&
+      isVehicleAssignedToUser(activeVehicle, currentUserId, assignedVehiclePlate);
+
     const kmColor =
       profileData.kmState.status === 'overdue'
         ? 'text-red-700 bg-red-50/80 border-red-200'
@@ -474,14 +483,16 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
                 )}
               </>
             )}
-            <button
-              type="button"
-              onClick={() => onOpenNewOrderForVehicle(activeVehicle.id)}
-              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-4 py-2 rounded-xl glass-button-primary text-white text-xs font-semibold transition-all touch-press"
-            >
-              <Plus className="w-4 h-4" />
-              Thêm phiếu cho xe này
-            </button>
+            {canCreateOrderForActiveVehicle && (
+              <button
+                type="button"
+                onClick={() => onOpenNewOrderForVehicle(activeVehicle.id)}
+                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-4 py-2 rounded-xl glass-button-primary text-white text-xs font-semibold transition-all touch-press"
+              >
+                <Plus className="w-4 h-4" />
+                Thêm phiếu cho xe này
+              </button>
+            )}
           </div>
         </div>
 
@@ -602,7 +613,11 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
           onEditOrder={onEditOrder}
           onDeleteOrder={onDeleteOrder}
           onFilterByPo={onFilterByPo}
-          onAddNew={() => onOpenNewOrderForVehicle(activeVehicle.id)}
+          onAddNew={
+            canCreateOrderForActiveVehicle
+              ? () => onOpenNewOrderForVehicle(activeVehicle.id)
+              : undefined
+          }
         />
 
         {showModal && renderVehicleModal()}

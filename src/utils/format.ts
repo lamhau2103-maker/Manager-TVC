@@ -143,7 +143,7 @@ export function getCurrentMonthStatusTitle(d: Date = new Date()): string {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const daysLeft = getDaysRemainingInCurrentMonth(d);
-  return `Thông tin dữ liệu trong tháng ${month}/${year} ( còn ${daysLeft} ngày )`;
+  return `THÔNG TIN DỮ LIỆU TRONG THÁNG ${month}/${year} ( còn ${daysLeft} ngày )`;
 }
 
 export const REFERENCE_TODAY = getLocalISODate();

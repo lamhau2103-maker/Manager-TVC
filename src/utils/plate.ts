@@ -80,3 +80,25 @@ export function splitPlateLines(plate: string): { top: string; bottom: string } 
     bottom: formatted.slice(idx + 1) || '...',
   };
 }
+
+/**
+ * Determine whether a vehicle is currently assigned to the given member user.
+ * Prefers live `vehicle.driver_id` over cached `assignedVehiclePlate`.
+ */
+export function isVehicleAssignedToUser(
+  vehicle: { driver_id?: string | null; plate_key?: string; plate?: string } | null | undefined,
+  userId?: string | null,
+  assignedVehiclePlate?: string | null
+): boolean {
+  if (!vehicle) return false;
+  if (userId && vehicle.driver_id) {
+    return vehicle.driver_id === userId;
+  }
+  if (!vehicle.driver_id && assignedVehiclePlate) {
+    const assignedKey = normalizePlateKey(assignedVehiclePlate);
+    const vehKey = vehicle.plate_key || normalizePlateKey(vehicle.plate || '');
+    return Boolean(assignedKey && vehKey && vehKey === assignedKey);
+  }
+  return false;
+}
+

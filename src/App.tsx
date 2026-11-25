@@ -53,6 +53,7 @@ import {
   getMonthDateRange,
   getPreviousMonth,
 } from './utils/format';
+import { isVehicleAssignedToUser } from './utils/plate';
 import { GlobalFilterBar } from './components/GlobalFilterBar';
 import { ComparisonOverview } from './components/ComparisonOverview';
 import { PriorityAlertsPanel } from './components/PriorityAlertsPanel';
@@ -129,7 +130,7 @@ function resolveInitialPageFromUrl(isAdmin: boolean): AppPage {
 }
 
 function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
-  const { profile, isAdmin, displayName, syncVehiclesForAuth } = useAuth();
+  const { user, profile, isAdmin, displayName, syncVehiclesForAuth } = useAuth();
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -141,6 +142,8 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   const store = useFleetStore({
     actorName: displayName,
     isAdmin,
+    userId: user?.id ?? null,
+    assignedVehiclePlate: profile?.vehicle_plate ?? null,
     onSyncError: showToast,
   });
   const effectiveAdminMode = isAdmin && store.isAdminMode;
@@ -430,9 +433,29 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const openNewOrder = (_vehId?: string | null) => {
+  const openNewOrder = (vehId?: string | null) => {
+    if (isAdmin) {
+      showToast('Admin không có quyền thêm/lập phiếu bảo dưỡng mới.');
+      return;
+    }
+    const assignedVehicles = store.vehicles.filter((v) =>
+      isVehicleAssignedToUser(v, user?.id ?? null, profile?.vehicle_plate ?? null)
+    );
+    if (assignedVehicles.length === 0) {
+      showToast('Tài khoản của bạn chưa được gắn phụ trách biển số xe nào.');
+      return;
+    }
+    if (vehId) {
+      const matched = assignedVehicles.find((v) => v.id === vehId || v.plate === vehId);
+      if (!matched) {
+        showToast('Bạn chỉ được thêm/lập phiếu cho biển số xe đang phụ trách.');
+        return;
+      }
+      setPreselectedVehicleId(matched.id);
+    } else {
+      setPreselectedVehicleId(assignedVehicles[0].id);
+    }
     setEditingOrder(null);
-    setPreselectedVehicleId(null);
     setOrderModalOpen(true);
   };
 
@@ -1075,16 +1098,18 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => openNewOrder()}
-                aria-label="Thêm phiếu bảo dưỡng mới"
-                title="Thêm phiếu bảo dưỡng mới"
-                className="min-w-[44px] min-h-[44px] sm:px-3.5 rounded-xl glass-button-primary text-white inline-flex items-center justify-center gap-1.5 text-xs font-bold whitespace-nowrap touch-press"
-              >
-                <Plus className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
-                <span className="hidden sm:inline">Thêm phiếu</span>
-              </button>
+              {!isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => openNewOrder()}
+                  aria-label="Thêm phiếu bảo dưỡng mới"
+                  title="Thêm phiếu bảo dưỡng mới"
+                  className="min-w-[44px] min-h-[44px] sm:px-3.5 rounded-xl glass-button-primary text-white inline-flex items-center justify-center gap-1.5 text-xs font-bold whitespace-nowrap touch-press"
+                >
+                  <Plus className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
+                  <span className="hidden sm:inline">Thêm phiếu</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -1290,14 +1315,16 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => openNewOrder()}
-                className="inline-flex items-center gap-1.5 min-h-[42px] px-4 rounded-xl glass-button-primary text-white text-xs font-bold transition-all whitespace-nowrap shrink-0 touch-press"
-              >
-                <Plus className="w-4 h-4 shrink-0" />
-                Thêm phiếu
-              </button>
+              {!isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => openNewOrder()}
+                  className="inline-flex items-center gap-1.5 min-h-[42px] px-4 rounded-xl glass-button-primary text-white text-xs font-bold transition-all whitespace-nowrap shrink-0 touch-press"
+                >
+                  <Plus className="w-4 h-4 shrink-0" />
+                  Thêm phiếu
+                </button>
+              )}
             </div>
           </div>
         </header>
@@ -1567,7 +1594,10 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                           prevLabel={formatMonthLabel(prevCalendarMonth)}
                           vehicleStatuses={vehicleStatuses}
                           onOpenVehicle={openVehicleProfile}
-                          onOpenNewOrderForVehicle={(vid) => openNewOrder(vid)}
+                          canCreateOrder={!isAdmin}
+                          onOpenNewOrderForVehicle={
+                            !isAdmin ? (vid) => openNewOrder(vid) : undefined
+                          }
                           isAdminMode={effectiveAdminMode}
                           onToggleBlock={store.toggleDashboardBlockVisibility}
                         />
@@ -1578,7 +1608,9 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                           alerts={alerts}
                           onOpenVehicle={openVehicleProfile}
                           onApplyFilter={(patch) => updateFilters(patch)}
-                          onOpenNewOrderForVehicle={(vid) => openNewOrder(vid)}
+                          onOpenNewOrderForVehicle={
+                            !isAdmin ? (vid) => openNewOrder(vid) : undefined
+                          }
                           headerAction={
                             effectiveAdminMode ? (
                               <button
@@ -1653,7 +1685,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                               showToast('Đã xóa phiếu bảo dưỡng và ghi nhận vào Nhật ký.');
                             }}
                             onFilterByPo={(po) => updateFilters({ poNumber: po })}
-                            onAddNew={() => openNewOrder()}
+                            onAddNew={!isAdmin ? () => openNewOrder() : undefined}
                           />
                         </div>
                       );
@@ -1771,7 +1803,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                       showToast('Đã xóa phiếu bảo dưỡng.');
                     }}
                     onFilterByPo={(po) => updateFilters({ poNumber: po })}
-                    onAddNew={() => openNewOrder()}
+                    onAddNew={!isAdmin ? () => openNewOrder() : undefined}
                   />
                 </div>
               )}
@@ -1783,6 +1815,8 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                   allItems={store.items}
                   selectedVehicleId={selectedVehicleId}
                   isAdmin={isAdmin}
+                  currentUserId={user?.id ?? null}
+                  assignedVehiclePlate={profile?.vehicle_plate ?? null}
                   onSelectVehicle={(vid) => {
                     setSelectedVehicleId(vid);
                     if (vid) {
@@ -1934,7 +1968,9 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         onBulkAddPlates={handleGuardedBulkAddPlates}
         onSaveOrder={(orderPayload, itemPayloads) => {
           if (!isAdmin && orderPayload.id) return;
-          store.saveOrder(orderPayload, itemPayloads);
+          if (isAdmin && !orderPayload.id) return;
+          const savedId = store.saveOrder(orderPayload, itemPayloads);
+          if (!savedId) return;
           showToast(
             orderPayload.id
               ? 'Đã cập nhật phiếu bảo dưỡng và làm mới báo cáo.'

@@ -14,7 +14,7 @@ import {
   VehicleType,
 } from '../types';
 import { addDaysISO, formatVND, REFERENCE_TODAY } from '../utils/format';
-import { formatVietnamesePlate, normalizePlateKey } from '../utils/plate';
+import { formatVietnamesePlate, isVehicleAssignedToUser, normalizePlateKey } from '../utils/plate';
 import { ParsedImportRow } from '../utils/excel';
 import { supabase } from '../lib/supabaseClient';
 
@@ -50,6 +50,8 @@ interface FleetDatabaseState {
 interface UseFleetStoreOptions {
   actorName?: string;
   isAdmin?: boolean;
+  userId?: string | null;
+  assignedVehiclePlate?: string | null;
   onSyncError?: (message: string) => void;
 }
 
@@ -276,7 +278,13 @@ function loadAdminVisibility(): AdminVisibilityConfig {
 }
 
 export function useFleetStore(options: UseFleetStoreOptions = {}) {
-  const { actorName = 'Admin', isAdmin = false, onSyncError } = options;
+  const {
+    actorName = 'Admin',
+    isAdmin = false,
+    userId = null,
+    assignedVehiclePlate = null,
+    onSyncError,
+  } = options;
 
   const [db, setDb] = useState<FleetDatabaseState>({
     vehicles: [],
@@ -1089,12 +1097,24 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
         onSyncErrorRef.current?.('Bạn không có quyền chỉnh sửa phiếu bảo dưỡng.');
         return '';
       }
+      if (!isEdit && isAdmin) {
+        onSyncErrorRef.current?.('Admin không có quyền thêm/lập phiếu bảo dưỡng mới.');
+        return '';
+      }
 
       const now = new Date().toISOString();
       const orderId = isEdit && isUuid(orderPayload.id) ? orderPayload.id! : createUuid();
       const vehicle = dbRef.current.vehicles.find(
         (v) => v.id === orderPayload.vehicle_id || v.plate === orderPayload.vehicle_id
       );
+      if (!isEdit && !isAdmin) {
+        if (!vehicle || !isVehicleAssignedToUser(vehicle, userId, assignedVehiclePlate)) {
+          onSyncErrorRef.current?.(
+            'Bạn chỉ được phép thêm/lập phiếu cho biển số xe đang phụ trách.'
+          );
+          return '';
+        }
+      }
       const targetPlate = vehicle?.plate || orderPayload.vehicle_id;
 
       const nextItems: MaintenanceItem[] = itemPayloads.map((it) => ({
@@ -1169,7 +1189,20 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
           const {
             data: { session },
           } = await supabase.auth.getSession();
-          const userId = session?.user?.id ?? null;
+          const sessionUserId = session?.user?.id ?? null;
+
+          if (!isEdit && !isAdmin) {
+            if (
+              !sessionUserId ||
+              !vehicle ||
+              !isVehicleAssignedToUser(vehicle, sessionUserId, assignedVehiclePlate)
+            ) {
+              onSyncErrorRef.current?.(
+                'Bạn chỉ được phép thêm/lập phiếu cho biển số xe đang phụ trách.'
+              );
+              return;
+            }
+          }
 
           if (isEdit) {
             const { error: ticketErr } = await supabase
@@ -1197,7 +1230,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
               service_date: nextOrder.service_date,
               odometer_km: nextOrder.odometer_km,
               note: encodedNote,
-              created_by: userId,
+              created_by: sessionUserId,
             });
 
             if (ticketErr) {
@@ -1247,7 +1280,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
 
       return orderId;
     },
-    [actorName, isAdmin, recordActivityLog, syncFromServer]
+    [actorName, assignedVehiclePlate, isAdmin, recordActivityLog, syncFromServer, userId]
   );
 
   const appendItemsToExistingOrder = useCallback(
