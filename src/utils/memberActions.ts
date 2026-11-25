@@ -117,3 +117,33 @@ export function filterMembersByPlate(
     (m) => m.vehicle_plate && normalizePlateKey(m.vehicle_plate) === targetKey
   );
 }
+
+export async function invokeAdminUsers(payload: {
+  action: 'create' | 'reset_password' | 'delete';
+  username?: string;
+  password?: string;
+  full_name?: string;
+  vehicle_id?: string;
+  member_id?: string;
+}): Promise<{ data: any; error: any }> {
+  try {
+    const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
+    const res = await fetch('/api/admin/users', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) {
+      return { data: null, error: { message: json.error || 'Lỗi xử lý yêu cầu' } };
+    }
+    return { data: json, error: null };
+  } catch (err) {
+    return await supabase.functions.invoke('admin-users', { body: payload });
+  }
+}
+

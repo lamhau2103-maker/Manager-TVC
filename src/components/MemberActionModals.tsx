@@ -20,6 +20,7 @@ import { supabase } from '../lib/supabaseClient';
 import {
   extractFunctionError,
   filterMembersByPlate,
+  invokeAdminUsers,
   MemberProfileRow,
 } from '../utils/memberActions';
 import { formatDateVN } from '../utils/format';
@@ -68,14 +69,12 @@ export const CreateMemberModal: React.FC<CreateMemberModalProps> = ({
 
     setSubmitting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('admin-users', {
-        body: {
-          action: 'create',
-          username: rawId,
-          password,
-          full_name: vehicle.driver_name,
-          vehicle_id: vehicle.id,
-        },
+      const { data, error } = await invokeAdminUsers({
+        action: 'create',
+        username: rawId,
+        password,
+        full_name: vehicle.driver_name,
+        vehicle_id: vehicle.id,
       });
 
       if (error || (data && typeof data === 'object' && 'error' in data && data.error)) {
@@ -617,12 +616,10 @@ export const ResetPasswordModal: React.FC<ResetPasswordModalProps> = ({
 
     setSubmitting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('admin-users', {
-        body: {
-          action: 'reset_password',
-          user_id: member.id,
-          password,
-        },
+      const { data, error } = await invokeAdminUsers({
+        action: 'reset_password',
+        member_id: member.id,
+        password,
       });
 
       if (error || (data && typeof data === 'object' && 'error' in data && data.error)) {
@@ -801,11 +798,9 @@ export const DeleteMemberModal: React.FC<DeleteMemberModalProps> = ({
     setErrorMsg('');
     setSubmitting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('admin-users', {
-        body: {
-          action: 'delete',
-          user_id: member.id,
-        },
+      const { data, error } = await invokeAdminUsers({
+        action: 'delete',
+        member_id: member.id,
       });
 
       if (error || (data && typeof data === 'object' && 'error' in data && data.error)) {

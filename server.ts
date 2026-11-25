@@ -606,6 +606,13 @@ const baseSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
+const SUPABASE_SERVICE_ROLE_KEY =
+  (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY || '').trim() || SUPABASE_ANON_KEY;
+
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
+
 async function resolveCallerFromToken(token: string): Promise<AuthedCaller | null> {
   const { data: userData, error: authError } = await baseSupabase.auth.getUser(token);
   if (authError || !userData?.user) {
@@ -1731,6 +1738,111 @@ app.post(
       res.json({ ok: true, inserted, updated, createdVehicles, state, supabaseSynced });
     } catch {
       res.status(500).json({ error: 'Không thể nhập dữ liệu Excel/CSV.' });
+    }
+  }
+);
+
+// ADMIN USER MANAGEMENT (Create, Reset Password, Delete)
+app.post(
+  '/api/admin/users',
+  requireAuth,
+  requireAdmin,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      const { action, username, password, full_name, vehicle_id, member_id, user_id } = req.body || {};
+      const targetMemberId = String(member_id || user_id || '').trim();
+
+      if (action === 'create') {
+        const cleanUsername = String(username || '').trim().toLowerCase();
+        const cleanPassword = String(password || '');
+        const cleanFullName = String(full_name || '').trim();
+        const targetVehicleId = String(vehicle_id || '').trim();
+
+        if (!cleanUsername || cleanPassword.length < 8) {
+          return res.status(400).json({ error: 'ID đăng nhập và mật khẩu (tối thiểu 8 ký tự) không hợp lệ.' });
+        }
+
+        const { data: existingProfile } = await supabaseAdmin
+          .from('profiles')
+          .select('id')
+          .eq('username', cleanUsername)
+          .maybeSingle();
+
+        if (existingProfile) {
+          return res.status(400).json({ error: `ID đăng nhập "${cleanUsername}" đã tồn tại.` });
+        }
+
+        const email = `${cleanUsername}@thai-viet.local`;
+        const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+          email,
+          password: cleanPassword,
+          email_confirm: true,
+          user_metadata: { full_name: cleanFullName },
+        });
+
+        if (authError || !authData.user) {
+          return res.status(400).json({ error: authError?.message || 'Không thể tạo tài khoản xác thực.' });
+        }
+
+        const userId = authData.user.id;
+
+        const { error: profileError } = await supabaseAdmin.from('profiles').upsert({
+          id: userId,
+          username: cleanUsername,
+          full_name: cleanFullName,
+          role: 'user',
+        });
+
+        if (profileError) {
+          return res.status(400).json({ error: profileError.message || 'Không thể tạo hồ sơ thành viên.' });
+        }
+
+        if (targetVehicleId) {
+          await supabaseAdmin
+            .from('vehicles')
+            .update({ driver_id: userId, driver_name: cleanFullName })
+            .eq('id', targetVehicleId);
+        }
+
+        return res.json({ ok: true, userId });
+      }
+
+      if (action === 'reset_password') {
+        const newPassword = String(password || '');
+        if (!targetMemberId || newPassword.length < 8) {
+          return res.status(400).json({ error: 'Mật khẩu mới phải có tối thiểu 8 ký tự.' });
+        }
+
+        const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(targetMemberId, {
+          password: newPassword,
+        });
+
+        if (updateError) {
+          return res.status(400).json({ error: updateError.message || 'Không thể đặt lại mật khẩu.' });
+        }
+
+        return res.json({ ok: true });
+      }
+
+      if (action === 'delete') {
+        if (!targetMemberId) {
+          return res.status(400).json({ error: 'Mã thành viên không hợp lệ.' });
+        }
+
+        await supabaseAdmin
+          .from('vehicles')
+          .update({ driver_id: null })
+          .eq('driver_id', targetMemberId);
+
+        await supabaseAdmin.auth.admin.deleteUser(targetMemberId);
+        await supabaseAdmin.from('profiles').delete().eq('id', targetMemberId);
+
+        return res.json({ ok: true });
+      }
+
+      return res.status(400).json({ error: 'Hành động không hợp lệ.' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Lỗi xử lý yêu cầu quản lý tài khoản.' });
     }
   }
 );

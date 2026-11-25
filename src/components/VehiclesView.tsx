@@ -56,6 +56,7 @@ import {
   extractFunctionError,
   fetchAllMemberProfiles,
   filterMembersByPlate,
+  invokeAdminUsers,
   MemberProfileRow,
 } from '../utils/memberActions';
 import {
@@ -422,14 +423,12 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
     // Step 2: Invoke Supabase Edge Function `create-member`
     setIsCreatingMember(true);
     try {
-      const { data, error } = await supabase.functions.invoke('admin-users', {
-        body: {
-          action: 'create',
-          username: rawId,
-          password: memberPassword,
-          full_name: addedVehicle.driver_name,
-          vehicle_id: addedVehicle.id,
-        },
+      const { data, error } = await invokeAdminUsers({
+        action: 'create',
+        username: rawId,
+        password: memberPassword,
+        full_name: addedVehicle.driver_name,
+        vehicle_id: addedVehicle.id,
       });
 
       if (error || (data && typeof data === 'object' && 'error' in data && data.error)) {
