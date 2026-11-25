@@ -318,8 +318,8 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
             </div>
           )}
 
-          {/* Mobile Member Cards (< 640px) */}
-          <div className="sm:hidden divide-y divide-white/65">
+          {/* Mobile Member Cards (< 768px) */}
+          <div className="md:hidden divide-y divide-white/65">
             {membersLoading ? (
               <div className="py-8 text-center text-xs text-slate-500">
                 <span className="inline-flex items-center gap-2">
@@ -401,9 +401,9 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
             )}
           </div>
 
-          {/* Tablet & Desktop Member Table (>= 640px) */}
-          <div className="hidden sm:block overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+          {/* Tablet & Desktop Member Table (>= 768px) */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[740px] text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-white/60 bg-white/40 backdrop-blur-md text-[11px] font-semibold text-slate-600">
                   <th className="sticky-col-left-head py-3 px-4 whitespace-nowrap">ID đăng nhập</th>
@@ -544,8 +544,8 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
           </div>
         </div>
 
-        {/* Mobile Audit Cards (< 640px) */}
-        <div className="sm:hidden divide-y divide-slate-200/60">
+        {/* Mobile Audit Cards (< 768px) */}
+        <div className="md:hidden divide-y divide-slate-200/60">
           {visibleLogs.length === 0 ? (
             <div className="py-8 px-4 text-center text-xs text-slate-500">
               Chưa có nhật ký thay đổi phù hợp.
@@ -573,8 +573,8 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
           )}
         </div>
 
-        {/* Tablet & Desktop Audit Table (>= 640px) */}
-        <div className="hidden sm:block overflow-x-auto">
+        {/* Tablet & Desktop Audit Table (>= 768px) */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full min-w-[700px] text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200/80 bg-slate-50/75 text-[11px] font-semibold text-slate-500">

@@ -85,8 +85,8 @@ export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
             </div>
           </div>
 
-          {/* Mobile Stacked Quick-Fix Cards (< 640px) */}
-          <div className="sm:hidden divide-y divide-amber-200/60">
+          {/* Mobile Stacked Quick-Fix Cards (< 768px) */}
+          <div className="md:hidden divide-y divide-amber-200/60">
             {missingItems.map((it) => {
               const val = draftPos[it.id] ?? '';
               return (
@@ -156,8 +156,8 @@ export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
             })}
           </div>
 
-          {/* Tablet / Desktop Quick-Fix Table (>= 640px) */}
-          <div className="hidden sm:block overflow-x-auto">
+          {/* Tablet / Desktop Quick-Fix Table (>= 768px) */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-slate-200/70 bg-white/70 text-[11px] text-slate-500">
@@ -252,8 +252,8 @@ export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
           </p>
         </div>
 
-        {/* Mobile Cards (< 640px) */}
-        <div className="sm:hidden divide-y divide-slate-200/60">
+        {/* Mobile Cards (< 768px) */}
+        <div className="md:hidden divide-y divide-slate-200/60">
           {poBreakdown.length === 0 ? (
             <div className="py-8 px-4 text-center text-xs text-slate-500">
               Chưa có dữ liệu PO trong kỳ chọn.
@@ -296,8 +296,8 @@ export const PoTrackingView: React.FC<PoTrackingViewProps> = ({
           )}
         </div>
 
-        {/* Tablet & Desktop Table (>= 640px) */}
-        <div className="hidden sm:block overflow-x-auto">
+        {/* Tablet & Desktop Table (>= 768px) */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full min-w-[680px] text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200/80 bg-slate-50/75 text-[11px] font-semibold text-slate-500">

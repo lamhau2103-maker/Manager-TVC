@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowUp,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
   Eye,
   EyeOff,
@@ -81,7 +82,7 @@ const NAV_ITEMS: Array<{
   { id: 'dashboard', label: 'Tổng quan', shortLabel: 'Tổng quan', icon: LayoutDashboard },
   { id: 'orders', label: 'Phiếu bảo dưỡng', shortLabel: 'Phiếu BD', icon: ClipboardList },
   { id: 'vehicles', label: 'Đội xe & Hồ sơ', shortLabel: 'Đội xe', icon: Truck },
-  { id: 'po', label: 'Theo dõi PO', shortLabel: 'Theo dõi PO', icon: Receipt },
+  { id: 'po', label: 'Theo dõi PO', shortLabel: 'Theo dõi', icon: Receipt },
   { id: 'settings', label: 'Cài đặt & Nhật ký', shortLabel: 'Cài đặt', icon: Settings },
 ];
 
@@ -138,6 +139,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   const [filters, setFilters] = useState<GlobalFilters>(DEFAULT_FILTERS);
   const [tabletDrawerOpen, setTabletDrawerOpen] = useState(false);
   const [mobileUserMenuOpen, setMobileUserMenuOpen] = useState(false);
+  const [mobileAdminControlsOpen, setMobileAdminControlsOpen] = useState(false);
 
   // Keep AuthContext driver name reactively synced whenever fleet vehicle data changes
   useEffect(() => {
@@ -454,7 +456,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   };
 
   return (
-    <div className="min-h-[100dvh] flex text-slate-900 relative overflow-x-clip max-w-[1600px] w-full mx-auto">
+    <div className="min-h-dvh flex text-slate-900 relative overflow-x-hidden max-w-[1600px] w-full mx-auto">
       {/* Ambient refractive orbs behind glass surfaces */}
       <div className="glass-backdrop" aria-hidden="true">
         <div className="glass-orb glass-orb-1" />
@@ -462,10 +464,10 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         <div className="glass-orb glass-orb-3" />
       </div>
 
-      {/* Tablet / iPad Collapsed Icon-Only Rail (640px - 1023px) */}
+      {/* Tablet Collapsed Icon-Only Rail (768px - 1023px) */}
       <aside
         aria-label="Thanh điều hướng thu gọn"
-        className="hidden sm:flex lg:hidden flex-col w-[76px] shrink-0 p-3 pr-0 no-print relative z-20"
+        className="hidden md:flex lg:hidden flex-col w-[76px] shrink-0 p-3 pr-0 no-print relative z-20"
       >
         <div className="sticky top-3 h-[calc(100dvh-1.5rem)] glass-panel-strong rounded-2xl py-3 px-2 flex flex-col items-center justify-between">
           <div className="flex flex-col items-center gap-3 w-full">
@@ -960,13 +962,21 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
       </AnimatePresence>
 
       {/* Main Content Area */}
-      <div className="flex-1 min-w-0 flex flex-col relative z-10">
-        {/* Top Bar: Mobile (<640px) has compact brand + user popover + full-width search row; Tablet/Laptop has 3-zone top bar */}
-        <header className="px-3 sm:px-6 pt-3 sm:pt-4 pb-2 space-y-2.5 sm:space-y-0 no-print safe-top">
-          {/* Mobile Compact Top Strip (< 640px) */}
-          <div className="flex sm:hidden items-center justify-between gap-2 relative">
+      <div className="flex-1 min-w-0 w-full flex flex-col relative z-10">
+        {/* Top Bar: Mobile (<768px) = 1 clean compact row + 1 unified search bar; Tablet/Desktop (>=768px) = single row */}
+        <header className="px-3 sm:px-5 md:px-6 pt-3 md:pt-4 pb-2 space-y-2.5 md:space-y-0 no-print safe-top w-full min-w-0">
+          {/* Mobile Compact Top Row (< 768px): [Hamburger + Logo] [Truncated Title] [+ Icon CTA + Profile] */}
+          <div className="flex md:hidden items-center justify-between gap-2 relative min-w-0">
             <div className="flex items-center gap-2 min-w-0 flex-1">
-              <div className="w-9 h-9 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setTabletDrawerOpen(true)}
+                aria-label="Mở menu điều hướng"
+                className="min-w-[44px] min-h-[44px] rounded-xl glass-panel inline-flex items-center justify-center text-slate-700 shrink-0 touch-press"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <div className="w-9 h-9 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-xs shrink-0 overflow-hidden">
                 <img
                   src={COMPANY_LOGO_SRC}
                   alt="THAI VIET CORPORATION"
@@ -974,15 +984,15 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-[11px] font-extrabold tracking-[-0.02em] text-slate-900 leading-tight truncate">
-                  THAI VIET CORPORATION
-                </div>
-                <div className="text-[11px] font-medium text-slate-600 leading-tight truncate">
-                  {activePage === 'dashboard' && 'BÁO CÁO BẢO DƯỠNG ĐỘI XE'}
+                <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-slate-950 leading-tight truncate">
+                  {activePage === 'dashboard' && 'BÁO CÁO ĐỘI XE'}
                   {activePage === 'orders' && 'Phiếu bảo dưỡng'}
                   {activePage === 'vehicles' && (selectedVehicleId ? 'Hồ sơ phương tiện' : 'Đội xe & Hồ sơ')}
-                  {activePage === 'po' && 'Theo dõi chi phí PO'}
+                  {activePage === 'po' && 'Theo dõi PO'}
                   {activePage === 'settings' && 'Cài đặt & Nhật ký'}
+                </h1>
+                <div className="text-[11px] font-semibold text-slate-500 leading-tight truncate">
+                  THAI VIET CORPORATION
                 </div>
               </div>
             </div>
@@ -991,21 +1001,23 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               <button
                 type="button"
                 onClick={() => openNewOrder()}
-                className="inline-flex items-center gap-1 min-h-[42px] px-2.5 rounded-xl glass-button-primary text-white text-[11px] font-bold whitespace-nowrap touch-press"
+                aria-label="Thêm phiếu bảo dưỡng mới"
+                title="Thêm phiếu bảo dưỡng mới"
+                className="min-w-[44px] min-h-[44px] sm:px-3.5 rounded-xl glass-button-primary text-white inline-flex items-center justify-center gap-1.5 text-xs font-bold whitespace-nowrap touch-press"
               >
-                <Plus className="w-3.5 h-3.5 shrink-0" />
-                <span>Thêm phiếu</span>
+                <Plus className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
+                <span className="hidden sm:inline">Thêm phiếu</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setMobileUserMenuOpen((prev) => !prev)}
                 aria-label="Tài khoản và đăng xuất"
-                className={`min-w-[42px] min-h-[42px] rounded-xl glass-panel flex items-center justify-center touch-press ${
+                className={`min-w-[44px] min-h-[44px] rounded-xl glass-panel flex items-center justify-center touch-press ${
                   isAdmin ? 'text-blue-700' : 'text-emerald-700'
                 }`}
               >
-                {isAdmin ? <Shield className="w-4.5 h-4.5" /> : <User className="w-4.5 h-4.5" />}
+                {isAdmin ? <Shield className="w-5 h-5" /> : <User className="w-5 h-5" />}
               </button>
             </div>
 
@@ -1022,7 +1034,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -6, scale: 0.96 }}
                     transition={{ duration: 0.14 }}
-                    className="absolute right-0 top-[calc(100%+8px)] z-50 w-72 max-w-[calc(100vw-1.5rem)] glass-panel-strong rounded-2xl p-3.5 shadow-xl border border-white/90 space-y-2.5"
+                    className="absolute right-0 top-[calc(100%+8px)] z-50 w-72 max-w-[calc(100vw-1.5rem)] max-h-[80dvh] overflow-y-auto glass-panel-strong rounded-2xl p-3.5 shadow-xl border border-white/90 space-y-2.5"
                   >
                     <div className="flex items-start gap-2.5 pb-2.5 border-b border-slate-200/70">
                       <div
@@ -1035,12 +1047,12 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                         {isAdmin ? <Shield className="w-4.5 h-4.5" /> : <User className="w-4.5 h-4.5" />}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="text-xs font-extrabold text-slate-950 break-words leading-snug">
+                        <div className="text-sm font-extrabold text-slate-950 break-words leading-snug">
                           {displayName}
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5 mt-1">
                           <span
-                            className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+                            className={`px-1.5 py-0.5 rounded-md text-[11px] font-bold ${
                               isAdmin
                                 ? 'bg-blue-100 text-blue-800 border border-blue-200'
                                 : 'bg-slate-200/80 text-slate-700 border border-slate-300/70'
@@ -1049,7 +1061,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                             {isAdmin ? 'Admin' : 'Người dùng'}
                           </span>
                           {profile?.vehicle_plate && (
-                            <span className="font-mono text-[10px] font-semibold text-slate-600">
+                            <span className="font-mono text-[11px] font-semibold text-slate-600">
                               {profile.vehicle_plate}
                             </span>
                           )}
@@ -1112,18 +1124,42 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
             </AnimatePresence>
           </div>
 
-          {/* Mobile Full-Width Search Row (< 640px) */}
-          <button
-            type="button"
-            onClick={() => setSearchModalOpen(true)}
-            className="sm:hidden w-full min-h-[44px] px-3.5 rounded-xl glass-input flex items-center gap-2.5 text-xs text-slate-600 text-left touch-press"
-          >
-            <Search className="w-4 h-4 text-blue-600 shrink-0" />
-            <span className="flex-1">Tìm nhanh biển số, số PO, hạng mục...</span>
-          </button>
+          {/* Mobile Single Unified Search Bar (< 768px, 100% width) */}
+          <div className="md:hidden relative w-full flex items-center">
+            <Search className="w-4 h-4 text-blue-600 absolute left-3.5 pointer-events-none" />
+            <input
+              type="search"
+              value={filters.searchQuery}
+              onChange={(e) => updateFilters({ searchQuery: e.target.value })}
+              placeholder="Tìm biển số, số PO, hạng mục..."
+              aria-label="Tìm nhanh biển số, số PO, hạng mục"
+              className="glass-input w-full min-h-[44px] pl-10 pr-20 rounded-xl text-sm text-slate-900 placeholder:text-slate-500"
+            />
+            <div className="absolute right-1.5 flex items-center gap-0.5">
+              {filters.searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => updateFilters({ searchQuery: '' })}
+                  aria-label="Xóa từ khóa tìm kiếm"
+                  className="min-w-[36px] min-h-[36px] inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSearchModalOpen(true)}
+                aria-label="Mở tìm kiếm nâng cao"
+                title="Mở tra cứu nhanh xe & PO"
+                className="min-h-[34px] px-2.5 rounded-lg bg-blue-50/90 text-blue-700 text-[11px] font-bold whitespace-nowrap"
+              >
+                Tra cứu
+              </button>
+            </div>
+          </div>
 
-          {/* Tablet & Desktop Top Bar (>= 640px) */}
-          <div className="hidden sm:flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5">
+          {/* Tablet & Desktop Top Bar (>= 768px) */}
+          <div className="hidden md:flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5 min-w-0">
             <div className="flex items-center gap-2.5 min-w-[200px] flex-1">
               <button
                 type="button"
@@ -1133,7 +1169,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               >
                 <Menu className="w-5 h-5" />
               </button>
-              <h1 className="fluid-page-title font-extrabold tracking-tight text-slate-900 break-words leading-snug">
+              <h1 className="fluid-page-title font-extrabold tracking-tight text-slate-900 break-words leading-snug min-w-0">
                 {activePage === 'dashboard' && 'BÁO CÁO BẢO DƯỠNG ĐỘI XE'}
                 {activePage === 'orders' && 'Danh sách phiếu bảo dưỡng'}
                 {activePage === 'vehicles' &&
@@ -1143,25 +1179,44 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               </h1>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0 max-w-full">
-              <button
-                type="button"
-                onClick={() => setSearchModalOpen(true)}
-                className="flex items-center justify-between gap-2.5 w-44 md:w-64 lg:w-72 xl:w-80 min-w-0 min-h-[42px] px-3 rounded-xl glass-input text-xs text-slate-500 hover:text-slate-800 touch-press"
-              >
-                <span className="inline-flex items-center gap-2 min-w-0 truncate">
-                  <Search className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span className="truncate">Tìm nhanh biển số, PO, hạng mục...</span>
-                </span>
-                <kbd className="hidden xl:inline-block font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-200/80 text-slate-600 shrink-0">
-                  Ctrl K
-                </kbd>
-              </button>
+            <div className="flex items-center gap-2.5 shrink-0 max-w-full">
+              {/* Single Unified Search Input (>= 768px) */}
+              <div className="relative flex items-center w-60 lg:w-72 xl:w-80 min-w-0">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
+                <input
+                  type="text"
+                  value={filters.searchQuery}
+                  onChange={(e) => updateFilters({ searchQuery: e.target.value })}
+                  placeholder="Tìm nhanh biển số, PO, hạng mục..."
+                  aria-label="Tìm nhanh biển số, PO, hạng mục"
+                  className="glass-input w-full min-h-[42px] pl-9 pr-16 rounded-xl text-xs text-slate-900 placeholder:text-slate-500"
+                />
+                <div className="absolute right-1.5 flex items-center gap-1">
+                  {filters.searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => updateFilters({ searchQuery: '' })}
+                      aria-label="Xóa từ khóa"
+                      className="p-1 text-slate-400 hover:text-slate-700 rounded-md"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSearchModalOpen(true)}
+                    title="Mở tra cứu nhanh (Ctrl+K)"
+                    className="font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-200/80 hover:bg-blue-100 text-slate-600 hover:text-blue-800 shrink-0 transition-colors"
+                  >
+                    Ctrl K
+                  </button>
+                </div>
+              </div>
 
               <button
                 type="button"
                 onClick={() => openNewOrder()}
-                className="inline-flex items-center gap-1.5 min-h-[42px] px-3.5 sm:px-4 rounded-xl glass-button-primary text-white text-xs font-bold transition-all whitespace-nowrap shrink-0 touch-press"
+                className="inline-flex items-center gap-1.5 min-h-[42px] px-4 rounded-xl glass-button-primary text-white text-xs font-bold transition-all whitespace-nowrap shrink-0 touch-press"
               >
                 <Plus className="w-4 h-4 shrink-0" />
                 Thêm phiếu
@@ -1182,8 +1237,8 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
           </div>
         </div>
 
-        {/* Main Viewport */}
-        <main className="flex-1 px-3 sm:px-6 pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))] sm:pb-10 pt-2 space-y-4 w-full min-w-0">
+        {/* Main Viewport — reserves clearance for mobile fixed bottom nav bar + safe-area */}
+        <main className="flex-1 px-3 sm:px-5 md:px-6 pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))] md:pb-10 pt-2 space-y-4 w-full min-w-0">
           {/* Global Filter Bar on analytical & ledger pages */}
           {(activePage === 'dashboard' || activePage === 'orders' || activePage === 'po') && (
             <GlobalFilterBar
@@ -1209,60 +1264,90 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-              className="space-y-4"
+              className="space-y-4 min-w-0"
             >
               {isAdmin && activePage === 'dashboard' && (
                 <>
-                  {/* Admin Visibility Control Bar on Dashboard (only visible to Admin in Admin Mode) */}
+                  {/* Admin Visibility Control Bar: Collapsible Accordion on Mobile (<768px), inline wrap on Desktop (>=768px) */}
                   {effectiveAdminMode && (
                     <section
                       aria-label="Quyền Admin ẩn hiện các mục báo cáo"
-                      className="glass-tile rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2.5 no-print"
+                      className="glass-tile rounded-2xl px-3.5 sm:px-4 py-2.5 no-print w-full min-w-0"
                     >
-                      <div className="flex flex-wrap items-center gap-1.5 text-xs min-w-0">
-                        <span className="inline-flex items-center gap-1.5 font-bold text-blue-900 mr-1">
-                          <Shield className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                          Admin — Ẩn/Hiện tab báo cáo:
+                      {/* Mobile Accordion Header (< 768px) */}
+                      <button
+                        type="button"
+                        onClick={() => setMobileAdminControlsOpen((o) => !o)}
+                        className="md:hidden w-full min-h-[40px] flex items-center justify-between gap-2 text-left"
+                        aria-expanded={mobileAdminControlsOpen}
+                      >
+                        <span className="inline-flex items-center gap-2 text-xs font-bold text-blue-900 min-w-0">
+                          <Shield className="w-4 h-4 text-blue-600 shrink-0" />
+                          <span className="truncate">Admin — Ẩn/Hiện tab báo cáo</span>
+                          {store.hiddenDashboardBlocks.length > 0 && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold shrink-0">
+                              {store.hiddenDashboardBlocks.length} ẩn
+                            </span>
+                          )}
                         </span>
-                        {store.dashboardBlockOrder.map((blk) => {
-                          const hidden = isBlockHidden(blk);
-                          return (
-                            <button
-                              key={blk}
-                              type="button"
-                              onClick={() => store.toggleDashboardBlockVisibility(blk)}
-                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all text-left max-w-full whitespace-normal sm:whitespace-nowrap ${
-                                hidden
-                                  ? 'bg-amber-50/90 border-amber-300 text-amber-900 line-through'
-                                  : 'bg-white/75 border-white/90 text-slate-700 hover:bg-white'
-                              }`}
-                              title={hidden ? 'Bấm để hiện lại mục báo cáo này' : 'Bấm để ẩn và sắp xếp vị trí mục báo cáo này'}
-                            >
-                              {hidden ? (
-                                <EyeOff className="w-3 h-3 text-amber-700 shrink-0" />
-                              ) : (
-                                <Eye className="w-3 h-3 text-blue-600 shrink-0" />
-                              )}
-                              <span className="break-words">{DASHBOARD_BLOCK_LABELS[blk]}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                        <ChevronDown
+                          className={`w-4 h-4 text-slate-600 shrink-0 transition-transform duration-200 ${
+                            mobileAdminControlsOpen ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
 
-                      {(store.hiddenDashboardBlocks.length > 0 ||
-                        store.hiddenReportTabs.length > 0 ||
-                        hasCustomBlockOrder) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            store.resetReportVisibility();
-                            showToast('Đã khôi phục hiển thị và thứ tự mặc định toàn bộ báo cáo.');
-                          }}
-                          className="text-[11px] font-bold text-blue-700 hover:underline whitespace-nowrap shrink-0"
-                        >
-                          Hiện tất cả &amp; mặc định
-                        </button>
-                      )}
+                      {/* Chips Body: Collapsed by default on mobile (<768px), always visible on >=768px */}
+                      <div
+                        className={`${
+                          mobileAdminControlsOpen ? 'flex mt-2.5 pt-2.5 border-t border-white/75' : 'hidden'
+                        } md:flex flex-wrap items-center justify-between gap-2.5 min-w-0`}
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs min-w-0 flex-1">
+                          <span className="hidden md:inline-flex items-center gap-1.5 font-bold text-blue-900 mr-1 whitespace-nowrap">
+                            <Shield className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                            Admin — Ẩn/Hiện tab báo cáo:
+                          </span>
+                          {store.dashboardBlockOrder.map((blk) => {
+                            const hidden = isBlockHidden(blk);
+                            return (
+                              <button
+                                key={blk}
+                                type="button"
+                                onClick={() => store.toggleDashboardBlockVisibility(blk)}
+                                className={`inline-flex items-center gap-1.5 min-h-[38px] md:min-h-[30px] px-2.5 py-1.5 rounded-xl text-xs md:text-[11px] font-semibold border transition-all text-left max-w-full whitespace-normal sm:whitespace-nowrap touch-press ${
+                                  hidden
+                                    ? 'bg-amber-50/90 border-amber-300 text-amber-900 line-through'
+                                    : 'bg-white/80 border-white/95 text-slate-700 hover:bg-white'
+                                }`}
+                                title={hidden ? 'Bấm để hiện lại mục báo cáo này' : 'Bấm để ẩn và sắp xếp vị trí mục báo cáo này'}
+                              >
+                                {hidden ? (
+                                  <EyeOff className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                                ) : (
+                                  <Eye className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                )}
+                                <span className="break-words leading-snug">{DASHBOARD_BLOCK_LABELS[blk]}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {(store.hiddenDashboardBlocks.length > 0 ||
+                          store.hiddenReportTabs.length > 0 ||
+                          hasCustomBlockOrder) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              store.resetReportVisibility();
+                              showToast('Đã khôi phục hiển thị và thứ tự mặc định toàn bộ báo cáo.');
+                            }}
+                            className="min-h-[36px] md:min-h-0 px-2.5 py-1 rounded-lg text-xs md:text-[11px] font-bold text-blue-700 hover:underline whitespace-nowrap shrink-0"
+                          >
+                            Hiện tất cả &amp; mặc định
+                          </button>
+                        )}
+                      </div>
                     </section>
                   )}
 
@@ -1695,12 +1780,17 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         </main>
       </div>
 
-      {/* Mobile Fixed Bottom Navigation Bar (< 640px) — omits Settings for role = user */}
+      {/* Mobile Fixed Bottom Navigation Bar (< 768px) — omits Dashboard & Settings for role = user */}
       <nav
         aria-label="Điều hướng điện thoại"
-        className="sm:hidden fixed bottom-0 inset-x-0 z-40 glass-panel-strong border-t border-white/85 px-1.5 pt-1 safe-bottom no-print"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 glass-panel-strong border-t border-white/85 px-1.5 pt-1 safe-bottom no-print"
       >
-        <div className="flex items-stretch justify-around gap-0.5">
+        <div
+          className="grid gap-0.5 items-stretch"
+          style={{
+            gridTemplateColumns: `repeat(${Math.max(1, visibleNavItems.length)}, minmax(0, 1fr))`,
+          }}
+        >
           {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = activePage === item.id;
@@ -1716,8 +1806,8 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 key={item.id}
                 type="button"
                 onClick={() => navigateToPage(item.id)}
-                className={`relative flex-1 min-w-0 min-h-[54px] py-1.5 px-0.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all touch-press ${
-                  active ? 'text-blue-700 bg-blue-600/10 font-bold' : 'text-slate-600 font-medium'
+                className={`relative min-w-0 min-h-[54px] py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all touch-press ${
+                  active ? 'text-blue-700 bg-blue-600/12 font-bold' : 'text-slate-600 font-medium'
                 }`}
               >
                 <span className="relative">
@@ -1728,7 +1818,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     </span>
                   )}
                 </span>
-                <span className="text-[10px] leading-tight text-center truncate max-w-full px-0.5">
+                <span className="text-[11px] leading-tight text-center whitespace-nowrap truncate max-w-full">
                   {item.shortLabel}
                 </span>
               </button>
@@ -1745,7 +1835,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 12 }}
             transition={{ duration: 0.16 }}
-            className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] sm:bottom-6 right-3 sm:right-6 left-3 sm:left-auto z-50 glass-panel-strong px-4 py-3 rounded-xl border border-emerald-200 shadow-lg flex items-center gap-2 text-xs font-semibold text-slate-900 no-print"
+            className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:bottom-6 right-3 md:right-6 left-3 md:left-auto z-50 glass-panel-strong px-4 py-3 rounded-xl border border-emerald-200 shadow-lg flex items-center gap-2 text-xs font-semibold text-slate-900 no-print"
           >
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span className="break-words">{toastMsg}</span>
@@ -1866,18 +1956,18 @@ export default function App() {
   // Unauthenticated or waiting for LoginLamp bloom to complete: NEVER render dashboard before auth
   const showDashboard = Boolean(session) && (viewStage === 'revealing' || viewStage === 'dashboard');
   const showLamp = !session || viewStage === 'lamp' || viewStage === 'revealing';
+  const shouldAnimateReveal = cameFromLamp && viewStage === 'revealing';
 
   return (
     <>
       {showDashboard && (
-        <motion.div
+        /* Single persistent wrapper with no resting CSS transform so DashboardApp never remounts and position:fixed bars stay anchored to viewport on iOS Safari */
+        <div
           key="dashboard-shell"
-          initial={cameFromLamp ? { opacity: 0, scale: 0.98 } : false}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+          className={shouldAnimateReveal ? 'w-full animate-dashboard-reveal' : 'w-full'}
         >
           <DashboardApp onLogout={handleLogout} />
-        </motion.div>
+        </div>
       )}
 
       {showLamp && (

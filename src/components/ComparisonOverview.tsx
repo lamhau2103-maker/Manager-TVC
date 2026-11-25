@@ -63,22 +63,22 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
       aria-label="Thông tin bảo dưỡng trong tháng ( đến hiện tại )"
       className="glass-panel rounded-2xl p-4 sm:p-5 space-y-4"
     >
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <h2 className="text-sm sm:text-base font-bold text-slate-950">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0">
+        <div className="space-y-1.5 min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="fluid-section-title font-bold text-slate-950 break-words">
               Thông tin bảo dưỡng trong tháng ( đến hiện tại )
             </h2>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-100/85 border border-emerald-200 text-[11px] font-bold text-emerald-900 font-mono tabular-nums">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-100/85 border border-emerald-200 text-xs sm:text-[11px] font-bold text-emerald-900 font-mono tabular-nums whitespace-nowrap">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               Đã làm: {servicedCount}/{vehicleStatuses.length} xe ({servicedPct}%)
             </span>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white/75 border border-slate-200/80 text-[11px] font-bold text-slate-700 font-mono tabular-nums">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white/75 border border-slate-200/80 text-xs sm:text-[11px] font-bold text-slate-700 font-mono tabular-nums whitespace-nowrap">
               <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
               Chưa làm: {unservicedCount} xe
             </span>
           </div>
-          <p className="text-[11px] text-slate-600">
+          <p className="text-sm md:text-xs text-slate-600 leading-relaxed break-words">
             Hiển thị trực quan toàn bộ phương tiện đã phát sinh bảo dưỡng, xe chưa vào xưởng, hạn đăng kiểm và chu kỳ km
           </p>
         </div>
@@ -99,7 +99,7 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
                   key={tab.id}
                   type="button"
                   onClick={() => setStatusFilter(tab.id)}
-                  className={`px-3 min-h-[38px] sm:min-h-[32px] py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
+                  className={`px-3 min-h-[40px] md:min-h-[32px] py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
                     statusFilter === tab.id
                       ? 'bg-white/92 text-blue-700 shadow-xs'
                       : 'text-slate-700 hover:text-slate-950'
@@ -116,7 +116,7 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
               type="button"
               onClick={() => onToggleBlock('monthly_status')}
               title="Quyền Admin: Ẩn khối Thông tin bảo dưỡng trong tháng ( đến hiện tại )"
-              className="min-w-[38px] min-h-[38px] sm:min-w-[32px] sm:min-h-[32px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-500 hover:text-red-700 hover:bg-white/85 transition-colors shrink-0"
+              className="min-w-[40px] min-h-[40px] md:min-w-[32px] md:min-h-[32px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-500 hover:text-red-700 hover:bg-white/85 transition-colors shrink-0"
             >
               <EyeOff className="w-3.5 h-3.5" />
             </button>
@@ -134,7 +134,7 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
 
       {/* Vehicle Cards Grid */}
       {filteredVehicleStatuses.length === 0 ? (
-        <div className="py-8 text-center text-xs text-slate-500">
+        <div className="py-8 text-center text-sm md:text-xs text-slate-500">
           Không có xe nào thuộc nhóm lọc này trong {periodLabel.toLowerCase()}.
         </div>
       ) : (
@@ -149,7 +149,7 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
             return (
               <div
                 key={v.id}
-                className={`rounded-xl p-3 border transition-all flex flex-col justify-between gap-2.5 ${
+                className={`rounded-xl p-3.5 sm:p-3 border transition-all flex flex-col justify-between gap-2.5 min-w-0 ${
                   row.servicedInPeriod
                     ? 'bg-white/62 border-emerald-200/80 hover:bg-white/82 shadow-xs'
                     : isOverdue
@@ -158,30 +158,30 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
                 }`}
               >
                 {/* Top Row: Plate + Serviced Status */}
-                <div className="space-y-1">
-                  <div className="flex items-start justify-between gap-1.5">
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-start justify-between gap-1.5 min-w-0">
                     <button
                       type="button"
                       onClick={() => onOpenVehicle(v.id, v.plate)}
-                      className="font-mono text-xs font-extrabold text-slate-950 hover:text-blue-700 transition-colors text-left break-words"
+                      className="font-mono text-sm sm:text-xs font-extrabold text-slate-950 hover:text-blue-700 transition-colors text-left break-words min-w-0"
                     >
                       {v.plate}
                     </button>
 
                     {row.servicedInPeriod ? (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-100/90 text-emerald-800 text-[10px] font-bold whitespace-nowrap shrink-0">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-100/90 text-emerald-800 text-[11px] sm:text-[10px] font-bold whitespace-nowrap shrink-0">
                         <CheckCircle2 className="w-3 h-3 shrink-0" />
                         Đã làm
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-200/80 text-slate-700 text-[10px] font-bold whitespace-nowrap shrink-0">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-200/80 text-slate-700 text-[11px] sm:text-[10px] font-bold whitespace-nowrap shrink-0">
                         <Clock className="w-3 h-3 shrink-0" />
                         Chưa làm
                       </span>
                     )}
                   </div>
 
-                  <div className="text-[11px] text-slate-600 break-words leading-snug">
+                  <div className="text-xs sm:text-[11px] text-slate-600 break-words leading-snug">
                     {v.type} · {v.department}
                   </div>
                 </div>

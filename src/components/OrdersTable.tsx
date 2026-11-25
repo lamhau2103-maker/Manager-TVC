@@ -43,11 +43,11 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
   return (
     <div className="glass-panel rounded-2xl overflow-hidden">
       <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200/70 flex flex-wrap items-center justify-between gap-2.5">
-        <div className="min-w-0">
-          <h3 className="fluid-section-title font-bold text-slate-900">{title}</h3>
-          <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{subtitle}</p>
+        <div className="min-w-0 flex-1">
+          <h3 className="fluid-section-title font-bold text-slate-900 break-words">{title}</h3>
+          <p className="text-sm md:text-xs text-slate-500 mt-0.5 leading-relaxed break-words">{subtitle}</p>
         </div>
-        <div className="text-xs text-slate-600 tabular-nums">
+        <div className="text-sm md:text-xs text-slate-600 tabular-nums shrink-0">
           Hiển thị <strong className="text-slate-900">{orders.length}</strong> phiếu · Tổng{' '}
           <strong className="font-mono text-blue-700">
             {formatVND(orders.reduce((s, o) => s + o.totalAmount, 0))}
@@ -283,14 +283,13 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
             })}
           </div>
 
-          {/* TABLET LANDSCAPE & DESKTOP (>= 768px): Full Table with horizontal scroll protection */}
+          {/* TABLET & DESKTOP (>= 768px): Full Table with sticky first column & horizontal scroll */}
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full min-w-[820px] text-left border-collapse">
               <thead>
                 <tr className="border-b border-white/60 bg-white/40 backdrop-blur-md text-[11px] font-semibold text-slate-600">
-                  <th className="py-3 pl-4 pr-2 w-8" />
+                  <th className="sticky-col-left-head py-3 pl-4 pr-3 whitespace-nowrap">Biển số & Xe</th>
                   <th className="py-3 px-3 whitespace-nowrap">Ngày</th>
-                  <th className="py-3 px-3 whitespace-nowrap">Biển số & Xe</th>
                   <th className="py-3 px-3 whitespace-nowrap">Gara / Loại BD</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Số km</th>
                   <th className="py-3 px-3 whitespace-nowrap">Số PO (theo hạng mục)</th>
@@ -312,30 +311,34 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
                           isExpanded ? 'bg-blue-50/50' : 'hover:bg-white/50'
                         }`}
                       >
-                        <td className="py-3 pl-4 pr-2 text-slate-400">
-                          {isExpanded ? (
-                            <ChevronDown className="w-4 h-4 text-blue-600" />
-                          ) : (
-                            <ChevronRight className="w-4 h-4" />
-                          )}
+                        <td className="sticky-col-left py-3 pl-3.5 pr-3">
+                          <div className="flex items-start gap-2">
+                            <span className="mt-0.5 text-slate-400 shrink-0">
+                              {isExpanded ? (
+                                <ChevronDown className="w-4 h-4 text-blue-600" />
+                              ) : (
+                                <ChevronRight className="w-4 h-4" />
+                              )}
+                            </span>
+                            <div className="min-w-0">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (ord.vehicle) onOpenVehicle(ord.vehicle.id, ord.vehicle.plate);
+                                }}
+                                className="font-mono font-bold text-sm text-blue-700 hover:text-blue-900 hover:underline text-left whitespace-nowrap"
+                              >
+                                {ord.vehicle?.plate ?? ord.vehicle_id}
+                              </button>
+                              <div className="text-[11px] text-slate-500 break-words leading-snug">
+                                {ord.vehicle?.type} · {ord.driver_name}
+                              </div>
+                            </div>
+                          </div>
                         </td>
                         <td className="py-3 px-3 font-mono font-semibold text-slate-700 whitespace-nowrap tabular-nums">
                           {formatDateVN(ord.service_date)}
-                        </td>
-                        <td className="py-3 px-3">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (ord.vehicle) onOpenVehicle(ord.vehicle.id, ord.vehicle.plate);
-                            }}
-                            className="font-mono font-bold text-sm text-blue-700 hover:text-blue-900 hover:underline text-left whitespace-nowrap"
-                          >
-                            {ord.vehicle?.plate ?? ord.vehicle_id}
-                          </button>
-                          <div className="text-[11px] text-slate-500 break-words leading-snug">
-                            {ord.vehicle?.type} · {ord.driver_name}
-                          </div>
                         </td>
                         <td className="py-3 px-3 min-w-[160px]">
                           <div className="font-medium text-slate-800 break-words leading-snug">
@@ -449,7 +452,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
                       {/* Expanded Drill-down Items Table */}
                       {isExpanded && (
                         <tr className="bg-white/30">
-                          <td colSpan={canModifyOrders ? 9 : 8} className="px-5 py-3.5">
+                          <td colSpan={canModifyOrders ? 8 : 7} className="px-5 py-3.5">
                             <div className="space-y-2.5">
                               {ord.note && (
                                 <div className="text-xs text-slate-700">

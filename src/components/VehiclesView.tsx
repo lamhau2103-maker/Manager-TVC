@@ -626,26 +626,28 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
 
         {/* Monthly spend chart for this vehicle */}
         {profileData.monthlySpend.length > 0 && (
-          <div className="glass-panel rounded-2xl p-5">
-            <h3 className="text-sm font-bold text-slate-900">
+          <div className="glass-panel rounded-2xl p-4 sm:p-5 min-w-0">
+            <h3 className="fluid-section-title font-bold text-slate-900 break-words">
               Chi phí bảo dưỡng theo từng tháng của xe {activeVehicle.plate}
             </h3>
-            <p className="text-[11px] text-slate-500 mb-3">
+            <p className="text-xs sm:text-[11px] text-slate-500 mb-3">
               Theo dõi biến động chi phí để phát hiện sớm xe xuống cấp
             </p>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={profileData.monthlySpend}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#475569' }} />
-                <YAxis
-                  tickFormatter={(v) => formatCompactVND(Number(v))}
-                  tick={{ fontSize: 11, fill: '#64748b' }}
-                  width={64}
-                />
-                <Tooltip formatter={(v: unknown) => formatVND(Number(v) || 0)} />
-                <Bar dataKey="cost" fill="#2563EB" radius={[6, 6, 0, 0]} barSize={38} />
-              </BarChart>
-            </ResponsiveContainer>
+            <div className="w-full h-52 sm:h-60 min-w-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={profileData.monthlySpend} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                  <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#475569' }} />
+                  <YAxis
+                    tickFormatter={(v) => formatCompactVND(Number(v))}
+                    tick={{ fontSize: 11, fill: '#64748b' }}
+                    width={56}
+                  />
+                  <Tooltip formatter={(v: unknown) => formatVND(Number(v) || 0)} />
+                  <Bar dataKey="cost" fill="#2563EB" radius={[6, 6, 0, 0]} barSize={32} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         )}
 
@@ -1135,10 +1137,10 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
         )}
       </div>
 
-      {/* MOBILE VIEW (< 640px): Vertical Glass Cards showing ALL fields cleanly without clipping */}
-      <div className="sm:hidden space-y-3">
+      {/* MOBILE VIEW (< 768px): Vertical Glass Cards showing ALL fields cleanly without clipping */}
+      <div className="md:hidden grid grid-cols-1 sm:grid-cols-2 gap-3">
         {filteredVehicles.length === 0 ? (
-          <div className="glass-panel rounded-2xl p-6 text-center text-xs text-slate-500">
+          <div className="sm:col-span-2 glass-panel rounded-2xl p-6 text-center text-sm text-slate-500">
             Không có xe nào khớp với bộ lọc hiện tại.
           </div>
         ) : (
@@ -1272,16 +1274,16 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
         )}
       </div>
 
-      {/* IPAD / TABLET COMPACT TABLE (640px - 1023px): Grouped columns so nothing truncates or overflows */}
-      <div className="hidden sm:block lg:hidden glass-panel rounded-2xl overflow-hidden">
+      {/* IPAD / TABLET COMPACT TABLE (768px - 1023px): Grouped columns with sticky first column */}
+      <div className="hidden md:block lg:hidden glass-panel rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full min-w-[680px] text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-white/60 bg-white/45 backdrop-blur-md text-[11px] font-semibold text-slate-600">
-                <th className="py-3 px-3.5">Biển số & Phương tiện</th>
-                <th className="py-3 px-3">Tài xế / Bộ phận</th>
-                <th className="py-3 px-3">Đăng kiểm & Chu kỳ km</th>
-                <th className="py-3 px-3.5 text-right">Chi phí lũy kế</th>
+                <th className="sticky-col-left-head py-3 px-3.5 whitespace-nowrap">Biển số & Phương tiện</th>
+                <th className="py-3 px-3 whitespace-nowrap">Tài xế / Bộ phận</th>
+                <th className="py-3 px-3 whitespace-nowrap">Đăng kiểm & Chu kỳ km</th>
+                <th className="py-3 px-3.5 text-right whitespace-nowrap">Chi phí lũy kế</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200/60">
@@ -1295,7 +1297,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
                     onClick={() => onSelectVehicle(v.id)}
                     className="cursor-pointer hover:bg-blue-50/45 transition-colors"
                   >
-                    <td className="py-3 px-3.5 align-top">
+                    <td className="sticky-col-left py-3 px-3.5 align-top">
                       <VietnamesePlateBadge plate={v.plate} size="sm" />
                       <div className="font-semibold text-slate-900 mt-1 break-words">
                         {v.brand_model}
@@ -1378,15 +1380,15 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
       {/* LAPTOP / DESKTOP FULL TABLE (>= 1024px) */}
       <div className="hidden lg:block glass-panel rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full min-w-[860px] text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-white/60 bg-white/40 backdrop-blur-md text-[11px] font-semibold text-slate-600">
-                <th className="py-3 px-4">Biển số & Loại xe</th>
-                <th className="py-3 px-3">Tài xế / Bộ phận</th>
-                <th className="py-3 px-3">Trạng thái</th>
-                <th className="py-3 px-3">Hạn cuối đăng kiểm</th>
-                <th className="py-3 px-3">Chu kỳ km / Hiện tại</th>
-                <th className="py-3 px-4 text-right">Chi phí lũy kế</th>
+                <th className="sticky-col-left-head py-3 px-4 whitespace-nowrap">Biển số & Loại xe</th>
+                <th className="py-3 px-3 whitespace-nowrap">Tài xế / Bộ phận</th>
+                <th className="py-3 px-3 whitespace-nowrap">Trạng thái</th>
+                <th className="py-3 px-3 whitespace-nowrap">Hạn cuối đăng kiểm</th>
+                <th className="py-3 px-3 whitespace-nowrap">Chu kỳ km / Hiện tại</th>
+                <th className="py-3 px-4 text-right whitespace-nowrap">Chi phí lũy kế</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200/60">
@@ -1400,7 +1402,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
                     onClick={() => onSelectVehicle(v.id)}
                     className="cursor-pointer hover:bg-blue-50/45 transition-colors"
                   >
-                    <td className="py-3 px-4">
+                    <td className="sticky-col-left py-3 px-4">
                       <div className="flex items-center gap-3">
                         <VietnamesePlateBadge plate={v.plate} size="sm" />
                         <div className="min-w-0">

@@ -54,8 +54,8 @@ function useViewportWidth() {
   }, []);
 
   return {
-    isMobile: state.width < 640,
-    isTablet: state.width >= 640 && state.width < 1024,
+    isMobile: state.width < 768,
+    isTablet: state.width >= 768 && state.width < 1024,
     orientSeq: state.orientSeq,
   };
 }
@@ -134,14 +134,14 @@ const ChartCard: React.FC<{
   className?: string;
 }> = ({ title, subtitle, rightSlot, children, className = '' }) => (
   <div className={`glass-panel rounded-2xl p-4 sm:p-5 flex flex-col min-w-0 ${className}`}>
-    <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
+    <div className="flex flex-wrap items-start justify-between gap-2 mb-3 min-w-0">
       <div className="min-w-0 flex-1">
-        <h3 className="fluid-section-title font-bold text-slate-900 leading-snug">{title}</h3>
-        <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{subtitle}</p>
+        <h3 className="fluid-section-title font-bold text-slate-900 leading-snug break-words">{title}</h3>
+        <p className="text-xs sm:text-[11px] text-slate-500 mt-0.5 leading-relaxed break-words">{subtitle}</p>
       </div>
       {rightSlot}
     </div>
-    <div className="flex-1 min-h-[250px] min-w-0">{children}</div>
+    <div className="flex-1 min-w-0 w-full">{children}</div>
   </div>
 );
 
@@ -204,66 +204,69 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
             </div>
           }
         >
-          <ResponsiveContainer key={`daily-${orientSeq}`} width="100%" height={270}>
-            <AreaChart data={dailyData} margin={{ top: 8, right: isMobile ? 6 : 12, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="costGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#2563EB" stopOpacity={0.28} />
-                  <stop offset="95%" stopColor="#2563EB" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-              <XAxis
-                dataKey="day"
-                tick={{ fontSize: isMobile ? 10 : 11, fill: '#64748b' }}
-                tickLine={false}
-                axisLine={{ stroke: '#cbd5e1' }}
-                interval={isMobile ? 5 : 2}
-              />
-              <YAxis
-                tickFormatter={(v) => formatCompactVND(Number(v))}
-                tick={{ fontSize: isMobile ? 10 : 11, fill: '#64748b' }}
-                tickLine={false}
-                axisLine={false}
-                width={isMobile ? 48 : 64}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: 'rgba(255,255,255,0.96)',
-                  borderRadius: 12,
-                  border: '1px solid #cbd5e1',
-                  fontSize: 12,
-                }}
-                labelFormatter={(l) => `Ngày ${l}`}
-                formatter={(value: unknown, name: unknown) => [
-                  formatVND(Number(value) || 0),
-                  name === 'cumCurrent' || name === 'currentCost' ? periodLabel : prevLabel,
-                ]}
-              />
-              <Legend
-                iconType="circle"
-                wrapperStyle={{ fontSize: 11 }}
-                formatter={(v) =>
-                  v === 'cumCurrent' || v === 'currentCost' ? periodLabel : prevLabel
-                }
-              />
-              <Area
-                type="monotone"
-                dataKey={dailyMode === 'cumulative' ? 'cumCurrent' : 'currentCost'}
-                stroke="#2563EB"
-                strokeWidth={2.5}
-                fill="url(#costGrad)"
-              />
-              <Line
-                type="monotone"
-                dataKey={dailyMode === 'cumulative' ? 'cumPrev' : 'prevCost'}
-                stroke="#64748B"
-                strokeWidth={2}
-                strokeDasharray="5 5"
-                dot={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          <div className="w-full h-64 sm:h-72 min-w-0">
+            <ResponsiveContainer key={`daily-${orientSeq}`} width="100%" height="100%">
+              <AreaChart data={dailyData} margin={{ top: 8, right: isMobile ? 6 : 12, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="costGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#2563EB" stopOpacity={0.28} />
+                    <stop offset="95%" stopColor="#2563EB" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                <XAxis
+                  dataKey="day"
+                  tick={{ fontSize: isMobile ? 10 : 11, fill: '#64748b' }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#cbd5e1' }}
+                  interval={isMobile ? 5 : 2}
+                />
+                <YAxis
+                  tickFormatter={(v) => formatCompactVND(Number(v))}
+                  tick={{ fontSize: isMobile ? 10 : 11, fill: '#64748b' }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={isMobile ? 48 : 64}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'rgba(255,255,255,0.96)',
+                    borderRadius: 12,
+                    border: '1px solid #cbd5e1',
+                    fontSize: 12,
+                  }}
+                  labelFormatter={(l) => `Ngày ${l}`}
+                  formatter={(value: unknown, name: unknown) => [
+                    formatVND(Number(value) || 0),
+                    name === 'cumCurrent' || name === 'currentCost' ? periodLabel : prevLabel,
+                  ]}
+                />
+                <Legend
+                  verticalAlign="bottom"
+                  iconType="circle"
+                  wrapperStyle={{ fontSize: 11, paddingTop: 6 }}
+                  formatter={(v) =>
+                    v === 'cumCurrent' || v === 'currentCost' ? periodLabel : prevLabel
+                  }
+                />
+                <Area
+                  type="monotone"
+                  dataKey={dailyMode === 'cumulative' ? 'cumCurrent' : 'currentCost'}
+                  stroke="#2563EB"
+                  strokeWidth={2.5}
+                  fill="url(#costGrad)"
+                />
+                <Line
+                  type="monotone"
+                  dataKey={dailyMode === 'cumulative' ? 'cumPrev' : 'prevCost'}
+                  stroke="#64748B"
+                  strokeWidth={2}
+                  strokeDasharray="5 5"
+                  dot={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </ChartCard>
 
         {/* Chart 2 */}
@@ -273,12 +276,12 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
           subtitle="Phân bổ theo nhóm hạng mục (tối đa 6 màu) · Bấm vào lát cắt để lọc"
         >
           {categoryData.length === 0 ? (
-            <div className="h-[270px] flex items-center justify-center text-xs text-slate-400">
+            <div className="h-64 sm:h-72 flex items-center justify-center text-sm md:text-xs text-slate-400">
               Chưa có dữ liệu hạng mục trong kỳ chọn
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-12 xl:grid-cols-1 2xl:grid-cols-12 items-center gap-3 h-full">
-              <div className="sm:col-span-6 xl:col-span-1 2xl:col-span-6 relative h-[220px] min-w-0">
+            <div className="grid grid-cols-1 md:grid-cols-12 xl:grid-cols-1 2xl:grid-cols-12 items-center gap-3 h-full">
+              <div className="md:col-span-6 xl:col-span-1 2xl:col-span-6 relative h-56 sm:h-60 min-w-0 w-full">
                 <ResponsiveContainer key={`pie-${orientSeq}`} width="100%" height="100%">
                   <PieChart>
                     <Pie
@@ -328,7 +331,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
                 </div>
               </div>
 
-              <div className="sm:col-span-6 xl:col-span-1 2xl:col-span-6 space-y-1.5 min-w-0">
+              <div className="md:col-span-6 xl:col-span-1 2xl:col-span-6 space-y-1.5 min-w-0">
                 {categoryData.map((c) => {
                   const selected = activeCategory === c.name;
                   return (
@@ -378,17 +381,18 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
           subtitle={`So sánh Top 10 xe: ${periodLabel} vs ${prevLabel} · Bấm cột để mở Hồ sơ xe`}
         >
           {topVehicles.length === 0 ? (
-            <div className="h-[290px] flex items-center justify-center text-xs text-slate-400">
+            <div className="h-64 sm:h-72 flex items-center justify-center text-sm md:text-xs text-slate-400">
               Chưa có dữ liệu chi phí theo xe
             </div>
           ) : (
-            <ResponsiveContainer key={`topv-${orientSeq}`} width="100%" height={300}>
-              <BarChart
-                data={topVehicles}
-                layout="vertical"
-                margin={{ top: 4, right: isMobile ? 10 : 18, left: 2, bottom: 4 }}
-                barGap={2}
-              >
+            <div className="w-full h-72 sm:h-80 min-w-0">
+              <ResponsiveContainer key={`topv-${orientSeq}`} width="100%" height="100%">
+                <BarChart
+                  data={topVehicles}
+                  layout="vertical"
+                  margin={{ top: 4, right: isMobile ? 10 : 18, left: 2, bottom: 4 }}
+                  barGap={2}
+                >
                 <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" strokeOpacity={0.55} horizontal={false} />
                 <XAxis
                   type="number"
@@ -426,7 +430,8 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
                   ]}
                 />
                 <Legend
-                  wrapperStyle={{ fontSize: 11 }}
+                  verticalAlign="bottom"
+                  wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
                   formatter={(v) => (v === 'totalCost' ? periodLabel : prevLabel)}
                 />
                 <Bar
@@ -462,7 +467,8 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
                   }}
                 />
               </BarChart>
-            </ResponsiveContainer>
+              </ResponsiveContainer>
+            </div>
           )}
         </ChartCard>
 
@@ -473,16 +479,17 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
           subtitle="Tổng hợp theo từng hạng mục gắn số PO · Bấm cột để lọc toàn dashboard"
         >
           {topPoSlice.length === 0 ? (
-            <div className="h-[290px] flex items-center justify-center text-xs text-slate-400">
+            <div className="h-64 sm:h-72 flex items-center justify-center text-sm md:text-xs text-slate-400">
               Chưa có dữ liệu PO trong kỳ
             </div>
           ) : (
-            <ResponsiveContainer key={`po-${orientSeq}`} width="100%" height={290}>
-              <BarChart
-                data={topPoSlice}
-                layout="vertical"
-                margin={{ top: 4, right: isMobile ? 10 : 20, left: 2, bottom: 4 }}
-              >
+            <div className="w-full h-72 sm:h-80 min-w-0">
+              <ResponsiveContainer key={`po-${orientSeq}`} width="100%" height="100%">
+                <BarChart
+                  data={topPoSlice}
+                  layout="vertical"
+                  margin={{ top: 4, right: isMobile ? 10 : 20, left: 2, bottom: 4 }}
+                >
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                 <XAxis
                   type="number"
@@ -540,7 +547,8 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>
+              </ResponsiveContainer>
+            </div>
           )}
         </ChartCard>
       </div>
@@ -553,8 +561,9 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
           title="Xu hướng chi phí 6 tháng so với ngân sách"
           subtitle={`Cột: Thực chi tháng (đỏ = vượt ngân sách ${formatCompactVND(monthlyBudget)}) · Nét đứt: Ngân sách tháng · Bấm cột chọn tháng`}
         >
-          <ResponsiveContainer key={`sixm-${orientSeq}`} width="100%" height={270}>
-            <ComposedChart data={sixMonthWithBudget} margin={{ top: 8, right: isMobile ? 8 : 14, left: 0, bottom: 0 }}>
+          <div className="w-full h-64 sm:h-72 min-w-0">
+            <ResponsiveContainer key={`sixm-${orientSeq}`} width="100%" height="100%">
+              <ComposedChart data={sixMonthWithBudget} margin={{ top: 8, right: isMobile ? 8 : 14, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" strokeOpacity={0.55} vertical={false} />
               <XAxis
                 dataKey="label"
@@ -598,7 +607,8 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
                 }}
               />
               <Legend
-                wrapperStyle={{ fontSize: 11 }}
+                verticalAlign="bottom"
+                wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
                 formatter={(v) =>
                   v === 'cost' ? 'Chi phí thực tế (VNĐ)' : 'Ngân sách tháng'
                 }
@@ -636,8 +646,9 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
                 strokeDasharray="6 4"
                 dot={false}
               />
-            </ComposedChart>
-          </ResponsiveContainer>
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
         </ChartCard>
 
         {/* Chart 7: Sửa chữa hay thay thế? */}
@@ -647,16 +658,17 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
           subtitle="Tỷ lệ chi phí Thay thế so với Sửa chữa theo từng nhóm hạng mục · Bấm để lọc"
         >
           {actionByCategory.length === 0 ? (
-            <div className="h-[270px] flex items-center justify-center text-xs text-slate-400">
+            <div className="h-64 sm:h-72 flex items-center justify-center text-sm md:text-xs text-slate-400">
               Chưa có dữ liệu so sánh
             </div>
           ) : (
-            <ResponsiveContainer key={`act-${orientSeq}`} width="100%" height={270}>
-              <BarChart
-                data={actionByCategory}
-                layout="vertical"
-                margin={{ top: 4, right: isMobile ? 10 : 16, left: 2, bottom: 4 }}
-              >
+            <div className="w-full h-64 sm:h-72 min-w-0">
+              <ResponsiveContainer key={`act-${orientSeq}`} width="100%" height="100%">
+                <BarChart
+                  data={actionByCategory}
+                  layout="vertical"
+                  margin={{ top: 4, right: isMobile ? 10 : 16, left: 2, bottom: 4 }}
+                >
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                 <XAxis
                   type="number"
@@ -698,7 +710,8 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
                   }}
                 />
                 <Legend
-                  wrapperStyle={{ fontSize: 11 }}
+                  verticalAlign="bottom"
+                  wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
                   formatter={(v) => (v === 'replacePct' ? 'THAY THẾ' : 'SỬA CHỮA')}
                 />
                 <Bar
@@ -733,7 +746,8 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({
                   }}
                 />
               </BarChart>
-            </ResponsiveContainer>
+              </ResponsiveContainer>
+            </div>
           )}
         </ChartCard>
       </div>
