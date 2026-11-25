@@ -10,7 +10,7 @@ import React, {
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import type { Vehicle } from '../types';
-import { FLEET_STORAGE_KEY, readStoredVehicles } from '../store/useFleetStore';
+import { FLEET_STORAGE_KEY } from '../store/useFleetStore';
 import { normalizePlateKey } from '../utils/plate';
 
 export type UserRole = 'admin' | 'user';
@@ -129,24 +129,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [vehiclesSnapshot, setVehiclesSnapshot] = useState<Vehicle[]>(() => readStoredVehicles());
+  const [vehiclesSnapshot, setVehiclesSnapshot] = useState<Vehicle[]>([]);
 
   // Track which user.id already has its profile fetched to avoid duplicate API calls
   const loadedUserIdRef = useRef<string | null>(null);
 
   const syncVehiclesForAuth = useCallback((nextVehicles: Vehicle[]) => {
     setVehiclesSnapshot(nextVehicles);
-  }, []);
-
-  // Keep vehicles snapshot synchronized across browser tabs (e.g. admin edits driver_name in another tab)
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === FLEET_STORAGE_KEY) {
-        setVehiclesSnapshot(readStoredVehicles());
-      }
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
   }, []);
 
   const fetchUserProfile = useCallback(async (u: User): Promise<UserProfile> => {
@@ -161,7 +150,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loadedUserIdRef.current = nextSession.user.id;
       setSession(nextSession);
       setProfile(nextProfile);
-      setVehiclesSnapshot(readStoredVehicles());
       setLoading(false);
     },
     []
@@ -184,7 +172,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (active) {
             loadedUserIdRef.current = initialSession.user.id;
             setProfile(loaded);
-            setVehiclesSnapshot(readStoredVehicles());
           }
         } else {
           loadedUserIdRef.current = null;
@@ -225,7 +212,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loadProfileForUser(nextSession.user).then((loaded) => {
           if (active) {
             setProfile(loaded);
-            setVehiclesSnapshot(readStoredVehicles());
           }
         });
       }

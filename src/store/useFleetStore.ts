@@ -9,15 +9,6 @@ import {
   Vehicle,
   VehicleType,
 } from '../types';
-import {
-  buildSeedDataset,
-  isLegacyMockOrderId,
-  LEGACY_MOCK_LOG_IDS,
-  LEGACY_MOCK_PLATE_KEYS,
-  LEGACY_MOCK_VEHICLE_IDS,
-  REFERENCE_TODAY,
-  SEED_VEHICLES,
-} from '../data/seedData';
 import { addDaysISO, formatVND, generateId } from '../utils/format';
 import { formatVietnamesePlate, normalizePlateKey } from '../utils/plate';
 import { ParsedImportRow } from '../utils/excel';
@@ -29,26 +20,7 @@ const RECENT_PLATES_KEY = 'fleet_maintenance_v1_recent_plates';
 const BUDGET_STORAGE_KEY = 'fleet_maintenance_v1_monthly_budget';
 const ADMIN_VISIBILITY_KEY = 'fleet_maintenance_v1_admin_visibility';
 const DEFAULT_MONTHLY_BUDGET = 320_000_000;
-
-function isLegacyMockVehicle(v: Pick<Vehicle, 'id' | 'plate_key' | 'plate'>): boolean {
-  const key = v.plate_key || normalizePlateKey(v.plate);
-  return LEGACY_MOCK_VEHICLE_IDS.has(v.id) || LEGACY_MOCK_PLATE_KEYS.has(key);
-}
-
-export function readStoredVehicles(): Vehicle[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<FleetDatabaseState>;
-      if (Array.isArray(parsed.vehicles)) {
-        return parsed.vehicles.filter((v) => !isLegacyMockVehicle(v));
-      }
-    }
-  } catch {
-    // Fallback to empty seed vehicles
-  }
-  return SEED_VEHICLES;
-}
+const REFERENCE_TODAY = new Date().toISOString().slice(0, 10);
 
 const DEFAULT_DASHBOARD_BLOCK_ORDER: DashboardBlockId[] = [
   'monthly_status',
@@ -76,7 +48,7 @@ interface SharedServerFleetState extends FleetDatabaseState {
   version: number;
   monthlyBudget: number;
   hiddenReportTabs: AppPage[];
-  hiddenDashboardBlocks: DashboardBlockId[];
+  hiddenDashboardBlocks: AppPage[];
   dashboardBlockOrder: DashboardBlockId[];
 }
 
@@ -87,50 +59,11 @@ interface UseFleetStoreOptions {
 }
 
 function loadInitialState(): FleetDatabaseState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as FleetDatabaseState;
-      if (
-        Array.isArray(parsed.vehicles) &&
-        Array.isArray(parsed.orders) &&
-        Array.isArray(parsed.items)
-      ) {
-        const cleanedVehicles = parsed.vehicles
-          .filter((v) => !isLegacyMockVehicle(v))
-          .map((v) => ({
-            ...v,
-            registration_due_date:
-              v.registration_due_date || addDaysISO(REFERENCE_TODAY, 180),
-          }));
-
-        const removedVehicleIds = new Set(
-          parsed.vehicles.filter((v) => isLegacyMockVehicle(v)).map((v) => v.id)
-        );
-        const cleanedOrders = parsed.orders.filter(
-          (o) => !removedVehicleIds.has(o.vehicle_id) && !isLegacyMockOrderId(o.id)
-        );
-        const keptOrderIds = new Set(cleanedOrders.map((o) => o.id));
-        const cleanedItems = parsed.items.filter((it) => keptOrderIds.has(it.order_id));
-        const cleanedLogs = Array.isArray(parsed.auditLogs)
-          ? parsed.auditLogs.filter((l) => !LEGACY_MOCK_LOG_IDS.has(l.id))
-          : [];
-
-        return {
-          vehicles: cleanedVehicles,
-          orders: cleanedOrders,
-          items: cleanedItems,
-          auditLogs: cleanedLogs,
-          lastUpdated: parsed.lastUpdated || new Date().toISOString(),
-        };
-      }
-    }
-  } catch {
-    // Fallback to empty dataset
-  }
-  const seed = buildSeedDataset();
   return {
-    ...seed,
+    vehicles: [],
+    orders: [],
+    items: [],
+    auditLogs: [],
     lastUpdated: new Date().toISOString(),
   };
 }
@@ -142,10 +75,7 @@ function loadRecentPlates(): string[] {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         return parsed
-          .filter(
-            (p): p is string =>
-              typeof p === 'string' && !LEGACY_MOCK_PLATE_KEYS.has(normalizePlateKey(p))
-          )
+          .filter((p): p is string => typeof p === 'string' && Boolean(p.trim()))
           .slice(0, 5);
       }
     }
@@ -258,14 +188,7 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
     };
   }, []);
 
-  // Cache to localStorage for fast startup & offline resilience
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-    } catch {
-      // ignore quota errors
-    }
-  }, [db]);
+
 
   useEffect(() => {
     try {
@@ -1410,28 +1333,6 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
     [actorName, isAdmin, sendMutation]
   );
 
-  const resetDemoData = useCallback(() => {
-    if (!isAdmin) return;
-    const seed = buildSeedDataset();
-    const now = new Date().toISOString();
-    setDb({
-      ...seed,
-      auditLogs: [
-        {
-          id: generateId('log'),
-          timestamp: now,
-          actor: actorName,
-          action: 'UPDATE',
-          entity: 'system',
-          summary: 'Đặt lại dữ liệu đội xe trống (0 xe, 0 phiếu)',
-        },
-        ...seed.auditLogs,
-      ],
-      lastUpdated: now,
-    });
-    void sendMutation('/api/fleet/reset', 'POST', seed);
-  }, [actorName, isAdmin, sendMutation]);
-
   return {
     vehicles: db.vehicles,
     orders: db.orders,
@@ -1462,6 +1363,5 @@ export function useFleetStore(options: UseFleetStoreOptions = {}) {
     deleteOrder,
     assignPoToItem,
     upsertImportRows,
-    resetDemoData,
   };
 }

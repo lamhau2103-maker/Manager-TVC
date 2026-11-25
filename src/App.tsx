@@ -1763,10 +1763,6 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                   itemCount={store.items.length}
                   onOpenImport={() => setImportModalOpen(true)}
                   onExportExcel={handleExportExcel}
-                  onResetDemo={() => {
-                    store.resetDemoData();
-                    showToast('Đã khôi phục bộ dữ liệu mẫu ban đầu.');
-                  }}
                   onUpdateVehicle={(id, upd, opts) => {
                     const res = store.updateVehicle(id, upd);
                     if (res.ok && !opts?.silent) showToast('Đã cập nhật hồ sơ phương tiện.');
