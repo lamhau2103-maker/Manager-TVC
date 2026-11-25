@@ -44,7 +44,15 @@ import {
   resolvePreviousRange,
 } from './utils/analytics';
 import { exportReportToExcel } from './utils/excel';
-import { formatDateTimeVN } from './utils/format';
+import {
+  formatDateTimeVN,
+  formatMonthLabel,
+  getCurrentMonthStatusTitle,
+  getCurrentYearMonth,
+  getLocalISODate,
+  getMonthDateRange,
+  getPreviousMonth,
+} from './utils/format';
 import { GlobalFilterBar } from './components/GlobalFilterBar';
 import { ComparisonOverview } from './components/ComparisonOverview';
 import { PriorityAlertsPanel } from './components/PriorityAlertsPanel';
@@ -57,21 +65,25 @@ import { OrderFormModal } from './components/OrderFormModal';
 import { ExcelImportModal } from './components/ExcelImportModal';
 import { GlobalSearchModal } from './components/GlobalSearchModal';
 
-const DEFAULT_FILTERS: GlobalFilters = {
-  periodPreset: 'month',
-  selectedMonth: '2026-11',
-  customStartDate: '2026-11-01',
-  customEndDate: '2026-11-30',
-  plateKey: '',
-  vehicleType: '',
-  department: '',
-  garage: '',
-  category: '',
-  serviceType: '',
-  action: '',
-  poNumber: '',
-  searchQuery: '',
-};
+function createDefaultFilters(): GlobalFilters {
+  const currentYM = getCurrentYearMonth();
+  const range = getMonthDateRange(currentYM);
+  return {
+    periodPreset: 'month',
+    selectedMonth: currentYM,
+    customStartDate: range.start,
+    customEndDate: range.end,
+    plateKey: '',
+    vehicleType: '',
+    department: '',
+    garage: '',
+    category: '',
+    serviceType: '',
+    action: '',
+    poNumber: '',
+    searchQuery: '',
+  };
+}
 
 const NAV_ITEMS: Array<{
   id: AppPage;
@@ -136,7 +148,24 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     resolveInitialPageFromUrl(isAdmin)
   );
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
-  const [filters, setFilters] = useState<GlobalFilters>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<GlobalFilters>(() => createDefaultFilters());
+  const [liveDateKey, setLiveDateKey] = useState<string>(() => getLocalISODate());
+
+  useEffect(() => {
+    const refreshClock = () => {
+      const nextKey = getLocalISODate();
+      setLiveDateKey((prev) => (prev === nextKey ? prev : nextKey));
+    };
+    window.addEventListener('focus', refreshClock);
+    document.addEventListener('visibilitychange', refreshClock);
+    const timer = window.setInterval(refreshClock, 60_000);
+    return () => {
+      window.removeEventListener('focus', refreshClock);
+      document.removeEventListener('visibilitychange', refreshClock);
+      window.clearInterval(timer);
+    };
+  }, []);
+
   const [tabletDrawerOpen, setTabletDrawerOpen] = useState(false);
   const [mobileUserMenuOpen, setMobileUserMenuOpen] = useState(false);
   const [mobileAdminControlsOpen, setMobileAdminControlsOpen] = useState(false);
@@ -219,8 +248,9 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   };
 
   const resetAllFilters = () => {
+    const freshDefaults = createDefaultFilters();
     setFilters((prev) => ({
-      ...DEFAULT_FILTERS,
+      ...freshDefaults,
       periodPreset: prev.periodPreset,
       selectedMonth: prev.selectedMonth,
       customStartDate: prev.customStartDate,
@@ -315,15 +345,62 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     [currentFiltered.orders, prevFiltered.orders]
   );
 
+  const liveNow = useMemo(() => {
+    const [y, m, d] = liveDateKey.split('-').map(Number);
+    return new Date(y, (m || 1) - 1, d || 1);
+  }, [liveDateKey]);
+
+  const currentYearMonth = useMemo(() => getCurrentYearMonth(liveNow), [liveNow]);
+  const prevCalendarMonth = useMemo(
+    () => getPreviousMonth(currentYearMonth, 1),
+    [currentYearMonth]
+  );
+  const monthlyStatusTitle = useMemo(
+    () => getCurrentMonthStatusTitle(liveNow),
+    [liveNow]
+  );
+
+  const dashboardBlockLabels = useMemo<Record<DashboardBlockId, string>>(
+    () => ({
+      ...DASHBOARD_BLOCK_LABELS,
+      monthly_status: monthlyStatusTitle,
+    }),
+    [monthlyStatusTitle]
+  );
+
+  const currentMonthFiltered = useMemo(
+    () =>
+      filterEnrichedOrders(
+        store.vehicles,
+        store.orders,
+        store.items,
+        filters,
+        getMonthDateRange(currentYearMonth)
+      ),
+    [store.vehicles, store.orders, store.items, filters, currentYearMonth]
+  );
+
+  const prevCalendarMonthFiltered = useMemo(
+    () =>
+      filterEnrichedOrders(
+        store.vehicles,
+        store.orders,
+        store.items,
+        filters,
+        getMonthDateRange(prevCalendarMonth)
+      ),
+    [store.vehicles, store.orders, store.items, filters, prevCalendarMonth]
+  );
+
   const vehicleStatuses = useMemo(
     () =>
       buildMonthlyVehicleStatus(
         store.vehicles,
-        currentFiltered.orders,
-        prevFiltered.orders,
+        currentMonthFiltered.orders,
+        prevCalendarMonthFiltered.orders,
         filters
       ),
-    [store.vehicles, currentFiltered.orders, prevFiltered.orders, filters]
+    [store.vehicles, currentMonthFiltered.orders, prevCalendarMonthFiltered.orders, filters]
   );
 
   const poData = useMemo(
@@ -1327,7 +1404,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                                 ) : (
                                   <Eye className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                                 )}
-                                <span className="break-words leading-snug">{DASHBOARD_BLOCK_LABELS[blk]}</span>
+                                <span className="break-words leading-snug">{dashboardBlockLabels[blk]}</span>
                               </button>
                             );
                           })}
@@ -1428,7 +1505,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                                 Đã ẩn
                               </span>
                               <span className="text-xs sm:text-sm font-bold text-slate-800 truncate">
-                                {DASHBOARD_BLOCK_LABELS[blockId]}
+                                {dashboardBlockLabels[blockId]}
                               </span>
                               <span className="hidden sm:inline-flex font-mono text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-white/70 text-slate-500 tabular-nums shrink-0">
                                 Vị trí {index + 1}/{totalBlocks}
@@ -1485,8 +1562,9 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     if (blockId === 'monthly_status') {
                       content = (
                         <ComparisonOverview
-                          periodLabel={currentRange.label}
-                          prevLabel={prevRange.label}
+                          title={monthlyStatusTitle}
+                          periodLabel={formatMonthLabel(currentYearMonth)}
+                          prevLabel={formatMonthLabel(prevCalendarMonth)}
                           vehicleStatuses={vehicleStatuses}
                           onOpenVehicle={openVehicleProfile}
                           onOpenNewOrderForVehicle={(vid) => openNewOrder(vid)}

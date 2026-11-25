@@ -1360,7 +1360,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
               if (targetVehicleId && nextDriverName) {
                 onUpdateVehicle(
                   targetVehicleId,
-                  { driver_name: nextDriverName },
+                  { driver_id: transferMemberTarget.id, driver_name: nextDriverName },
                   { silent: true }
                 );
               }

@@ -14,6 +14,7 @@ import {
   formatKm,
   formatMonthLabel,
   formatShortMonth,
+  getCurrentYearMonth,
   getMonthDateRange,
   getPreviousMonth,
   REFERENCE_TODAY,
@@ -29,13 +30,16 @@ export interface DateRange {
 
 export function resolveDateRange(filters: GlobalFilters): DateRange {
   const { periodPreset, selectedMonth, customStartDate, customEndDate } = filters;
-  const [yStr, mStr] = selectedMonth.split('-');
-  const year = Number(yStr) || 2026;
-  const month = Number(mStr) || 11;
+  const fallbackYM = getCurrentYearMonth();
+  const activeYM = selectedMonth || fallbackYM;
+  const [yStr, mStr] = activeYM.split('-');
+  const now = new Date();
+  const year = Number(yStr) || now.getFullYear();
+  const month = Number(mStr) || now.getMonth() + 1;
 
   if (periodPreset === 'month') {
-    const r = getMonthDateRange(selectedMonth);
-    return { ...r, label: formatMonthLabel(selectedMonth) };
+    const r = getMonthDateRange(activeYM);
+    return { ...r, label: formatMonthLabel(activeYM) };
   }
   if (periodPreset === 'quarter') {
     const q = Math.floor((month - 1) / 3);
@@ -55,21 +59,24 @@ export function resolveDateRange(filters: GlobalFilters): DateRange {
       label: `Năm ${year}`,
     };
   }
+  const activeRange = getMonthDateRange(activeYM);
   return {
-    start: customStartDate || `${year}-11-01`,
-    end: customEndDate || `${year}-11-30`,
+    start: customStartDate || activeRange.start,
+    end: customEndDate || activeRange.end,
     label: `${customStartDate || '—'} → ${customEndDate || '—'}`,
   };
 }
 
 export function resolvePreviousRange(filters: GlobalFilters): DateRange {
   const { periodPreset, selectedMonth, customStartDate, customEndDate } = filters;
-  const [yStr, mStr] = selectedMonth.split('-');
-  const year = Number(yStr) || 2026;
-  const month = Number(mStr) || 11;
+  const activeYM = selectedMonth || getCurrentYearMonth();
+  const [yStr, mStr] = activeYM.split('-');
+  const now = new Date();
+  const year = Number(yStr) || now.getFullYear();
+  const month = Number(mStr) || now.getMonth() + 1;
 
   if (periodPreset === 'month') {
-    const prevM = getPreviousMonth(selectedMonth, 1);
+    const prevM = getPreviousMonth(activeYM, 1);
     const r = getMonthDateRange(prevM);
     return { ...r, label: formatMonthLabel(prevM) };
   }
@@ -641,7 +648,7 @@ export function buildSixMonthSeries(
   items: MaintenanceItem[],
   filters: GlobalFilters
 ) {
-  const anchorMonth = filters.selectedMonth || '2026-11';
+  const anchorMonth = filters.selectedMonth || getCurrentYearMonth();
   const months: string[] = [];
   for (let i = 5; i >= 0; i--) {
     months.push(getPreviousMonth(anchorMonth, i));
@@ -675,8 +682,13 @@ export function buildDailyTrendData(
   previousOrders: EnrichedOrder[],
   selectedMonth: string
 ) {
-  const [yStr, mStr] = selectedMonth.split('-');
-  const daysInMonth = new Date(Number(yStr) || 2026, Number(mStr) || 11, 0).getDate();
+  const [yStr, mStr] = (selectedMonth || getCurrentYearMonth()).split('-');
+  const now = new Date();
+  const daysInMonth = new Date(
+    Number(yStr) || now.getFullYear(),
+    Number(mStr) || now.getMonth() + 1,
+    0
+  ).getDate();
   const currMap = new Map<number, number>();
   const prevMap = new Map<number, number>();
 
@@ -1031,7 +1043,7 @@ export function buildCostVarianceHeatmap(
   byDepartment: HeatmapRow[];
   byVehicle: HeatmapRow[];
 } {
-  const anchorMonth = filters.selectedMonth || '2026-11';
+  const anchorMonth = filters.selectedMonth || getCurrentYearMonth();
   // Compute 5 months so even the earliest displayed month (4th back) has a valid MoM delta
   const allMonths: string[] = [];
   for (let i = 4; i >= 0; i--) {

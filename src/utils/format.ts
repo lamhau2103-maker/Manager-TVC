@@ -119,5 +119,32 @@ export function generateId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-export const REFERENCE_TODAY = new Date().toISOString().slice(0, 10);
+export function getLocalISODate(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function getCurrentYearMonth(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
+export function getDaysRemainingInCurrentMonth(d: Date = new Date()): number {
+  const year = d.getFullYear();
+  const monthIndex = d.getMonth(); // 0-indexed
+  const lastDayOfMonth = new Date(year, monthIndex + 1, 0).getDate();
+  return Math.max(0, lastDayOfMonth - d.getDate());
+}
+
+export function getCurrentMonthStatusTitle(d: Date = new Date()): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const daysLeft = getDaysRemainingInCurrentMonth(d);
+  return `Thông tin dữ liệu trong tháng ${month}/${year} ( còn ${daysLeft} ngày )`;
+}
+
+export const REFERENCE_TODAY = getLocalISODate();
 

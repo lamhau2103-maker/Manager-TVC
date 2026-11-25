@@ -14,9 +14,11 @@ import {
   formatDateVN,
   formatNumber,
   formatVND,
+  getCurrentMonthStatusTitle,
 } from '../utils/format';
 
 interface ComparisonOverviewProps {
+  title?: string;
   periodLabel: string;
   prevLabel: string;
   vehicleStatuses: MonthlyVehicleStatusRow[];
@@ -27,6 +29,7 @@ interface ComparisonOverviewProps {
 }
 
 export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
+  title,
   periodLabel,
   prevLabel,
   vehicleStatuses,
@@ -35,6 +38,7 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
   isAdminMode = false,
   onToggleBlock,
 }) => {
+  const sectionTitle = title || getCurrentMonthStatusTitle();
   // Fleet monthly servicing status filter
   const [statusFilter, setStatusFilter] = useState<'all' | 'serviced' | 'unserviced' | 'due'>('all');
 
@@ -60,14 +64,14 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
 
   return (
     <section
-      aria-label="Thông tin bảo dưỡng trong tháng ( đến hiện tại )"
+      aria-label={sectionTitle}
       className="glass-panel rounded-2xl p-4 sm:p-5 space-y-4"
     >
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0">
         <div className="space-y-1.5 min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="fluid-section-title font-bold text-slate-950 break-words">
-              Thông tin bảo dưỡng trong tháng ( đến hiện tại )
+              {sectionTitle}
             </h2>
             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-100/85 border border-emerald-200 text-xs sm:text-[11px] font-bold text-emerald-900 font-mono tabular-nums whitespace-nowrap">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
@@ -115,7 +119,7 @@ export const ComparisonOverview: React.FC<ComparisonOverviewProps> = ({
             <button
               type="button"
               onClick={() => onToggleBlock('monthly_status')}
-              title="Quyền Admin: Ẩn khối Thông tin bảo dưỡng trong tháng ( đến hiện tại )"
+              title={`Quyền Admin: Ẩn khối ${sectionTitle}`}
               className="min-w-[40px] min-h-[40px] md:min-w-[32px] md:min-h-[32px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-500 hover:text-red-700 hover:bg-white/85 transition-colors shrink-0"
             >
               <EyeOff className="w-3.5 h-3.5" />

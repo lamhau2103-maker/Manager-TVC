@@ -271,11 +271,11 @@ export const TransferMemberModal: React.FC<TransferMemberModalProps> = ({
   const [searchPlate, setSearchPlate] = useState('');
   const [selectedPlate, setSelectedPlate] = useState('');
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
-  const [driverName, setDriverName] = useState(member.full_name || '');
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  const pairedDriverName = (member.full_name || '').trim() || member.username;
   const currentPlateKey = normalizePlateKey(member.vehicle_plate ?? '');
 
   const filteredVehicles = useMemo(() => {
@@ -300,10 +300,6 @@ export const TransferMemberModal: React.FC<TransferMemberModalProps> = ({
   const handleSelectTarget = (v: Vehicle) => {
     setSelectedPlate(v.plate);
     setSelectedVehicleId(v.id);
-    const targetDriver = (v.driver_name || '').trim();
-    const hasRealTargetDriver =
-      targetDriver.length > 0 && targetDriver.toLowerCase() !== 'chưa phân công';
-    setDriverName(hasRealTargetDriver ? targetDriver : member.full_name || '');
     setConfirmOverwrite(false);
     setErrorMsg('');
   };
@@ -317,11 +313,6 @@ export const TransferMemberModal: React.FC<TransferMemberModalProps> = ({
       setErrorMsg('Vui lòng chọn biển số xe đích.');
       return;
     }
-    const trimmedName = driverName.trim();
-    if (!trimmedName) {
-      setErrorMsg('Vui lòng nhập tên tài xế của xe đích.');
-      return;
-    }
 
     // Require explicit second confirmation if destination vehicle already has another account
     if (conflictingMembers.length > 0 && !confirmOverwrite) {
@@ -332,27 +323,32 @@ export const TransferMemberModal: React.FC<TransferMemberModalProps> = ({
     setSubmitting(true);
     try {
       // 1. Clear previous vehicle driver_id for this member
-      await supabase.from('vehicles').update({ driver_id: null }).eq('driver_id', member.id);
+      const { error: unassignError } = await supabase
+        .from('vehicles')
+        .update({ driver_id: null })
+        .eq('driver_id', member.id);
 
-      // 2. Set driver_id on target vehicle using PK `plate`
-      if (selectedPlate) {
-        const { error: vError } = await supabase
-          .from('vehicles')
-          .update({
-            driver_id: member.id,
-          })
-          .eq('plate', selectedPlate);
-
-        if (vError) {
-          setErrorMsg(vError.message || 'Không thể cập nhật xe đích.');
-          setSubmitting(false);
-          return;
-        }
+      if (unassignError) {
+        setErrorMsg(unassignError.message || 'Không thể gỡ liên kết xe cũ.');
+        setSubmitting(false);
+        return;
       }
 
-      await supabase.from('profiles').update({ full_name: trimmedName }).eq('id', member.id);
+      // 2. Move this member (ID + established full_name together) to target vehicle using PK `plate`
+      const { error: vError } = await supabase
+        .from('vehicles')
+        .update({
+          driver_id: member.id,
+        })
+        .eq('plate', selectedPlate);
 
-      onSuccess(member.username, selectedPlate, selectedVehicleId, trimmedName);
+      if (vError) {
+        setErrorMsg(vError.message || 'Không thể cập nhật xe đích.');
+        setSubmitting(false);
+        return;
+      }
+
+      onSuccess(member.username, selectedPlate, selectedVehicleId, pairedDriverName);
     } catch (err) {
       setErrorMsg(
         err instanceof Error
@@ -384,7 +380,8 @@ export const TransferMemberModal: React.FC<TransferMemberModalProps> = ({
               Chuyển tài khoản sang xe khác
             </h3>
             <p className="text-[11px] text-slate-600 mt-0.5 break-words">
-              ID: <strong className="font-mono text-slate-900">{member.username}</strong> · Hiện gắn:{' '}
+              ID: <strong className="font-mono text-slate-900">{member.username}</strong> · Tài xế:{' '}
+              <strong className="text-slate-900">{pairedDriverName}</strong> · Hiện gắn:{' '}
               <strong className="font-mono text-slate-800">
                 {member.vehicle_plate || 'Chưa gắn xe'}
               </strong>
@@ -485,37 +482,28 @@ export const TransferMemberModal: React.FC<TransferMemberModalProps> = ({
             </div>
           </div>
 
-          {/* Editable destination vehicle driver name (updates both vehicle record and profiles.full_name) */}
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap items-center justify-between gap-1.5">
-              <label className="block text-xs font-semibold text-slate-700">
-                Tên tài xế của xe đích *
-              </label>
-              {member.full_name &&
-                member.full_name.trim() !== driverName.trim() && (
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={() => setDriverName(member.full_name ?? '')}
-                    className="text-[11px] font-semibold text-blue-700 hover:underline"
-                  >
-                    Dùng tên cũ ({member.full_name})
-                  </button>
-                )}
+          {/* Seamless pairing card: ID + established driver full_name move together */}
+          <div className="p-3.5 rounded-2xl glass-tile border border-blue-200/80 bg-blue-50/55 space-y-2">
+            <div className="text-xs font-bold text-slate-900">
+              Thông tin tài xế chuyển cùng tài khoản
             </div>
-            <input
-              type="text"
-              value={driverName}
-              onChange={(e) => {
-                setDriverName(e.target.value);
-                if (errorMsg) setErrorMsg('');
-              }}
-              placeholder="Nhập họ và tên tài xế của xe đích"
-              disabled={submitting}
-              className="glass-input w-full h-10 px-3 rounded-xl text-xs text-slate-900"
-            />
-            <p className="text-[11px] text-slate-500">
-              Khi xác nhận, tên này sẽ được đồng bộ vào cả hồ sơ xe đích và tài khoản thành viên.
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+              <div className="px-3 py-2 rounded-xl bg-white/80 border border-white">
+                <div className="text-[10.5px] font-semibold text-slate-500">ID đăng nhập</div>
+                <div className="font-mono font-extrabold text-slate-950 mt-0.5">
+                  {member.username}
+                </div>
+              </div>
+              <div className="px-3 py-2 rounded-xl bg-white/80 border border-white">
+                <div className="text-[10.5px] font-semibold text-slate-500">Họ tên tài xế</div>
+                <div className="font-bold text-slate-950 mt-0.5 break-words">
+                  {pairedDriverName}
+                </div>
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-600 leading-relaxed">
+              ID đăng nhập và họ tên tài xế đã thiết lập luôn đi liền mạch với nhau và sẽ cùng chuyển sang xe{' '}
+              <strong className="font-mono text-slate-900">{selectedPlate || 'đích'}</strong>.
             </p>
           </div>
 

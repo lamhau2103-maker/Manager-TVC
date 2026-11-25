@@ -21,7 +21,12 @@ import {
   VEHICLE_TYPES,
   Vehicle,
 } from '../types';
-import { formatDateTimeVN } from '../utils/format';
+import {
+  formatDateTimeVN,
+  formatMonthLabel,
+  getCurrentYearMonth,
+  getPreviousMonth,
+} from '../utils/format';
 import { PlateInput } from './PlateInput';
 
 interface GlobalFilterBarProps {
@@ -38,15 +43,6 @@ interface GlobalFilterBarProps {
   onExportPdf: () => void;
 }
 
-const MONTH_OPTIONS = [
-  { value: '2026-11', label: 'Tháng 11/2026' },
-  { value: '2026-10', label: 'Tháng 10/2026' },
-  { value: '2026-09', label: 'Tháng 09/2026' },
-  { value: '2026-08', label: 'Tháng 08/2026' },
-  { value: '2026-07', label: 'Tháng 07/2026' },
-  { value: '2026-06', label: 'Tháng 06/2026' },
-];
-
 export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
   filters,
   onChange,
@@ -61,6 +57,23 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
   onExportPdf,
 }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const monthOptions = useMemo(() => {
+    const currentYM = getCurrentYearMonth();
+    const set = new Set<string>();
+    for (let i = 0; i < 12; i++) {
+      set.add(getPreviousMonth(currentYM, i));
+    }
+    if (filters.selectedMonth) set.add(filters.selectedMonth);
+    for (const o of orders) {
+      if (o.service_date && o.service_date.length >= 7) {
+        set.add(o.service_date.slice(0, 7));
+      }
+    }
+    return Array.from(set)
+      .sort((a, b) => b.localeCompare(a))
+      .map((ym) => ({ value: ym, label: formatMonthLabel(ym) }));
+  }, [orders, filters.selectedMonth]);
 
   const garages = useMemo(
     () => Array.from(new Set(orders.map((o) => o.garage).filter(Boolean))).sort(),
@@ -338,7 +351,7 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
                     onChange={(e) => onChange({ selectedMonth: e.target.value })}
                     className="glass-input w-full min-h-[44px] md:min-h-[38px] pl-9 pr-7 rounded-xl text-sm md:text-xs font-semibold text-slate-800"
                   >
-                    {MONTH_OPTIONS.map((m) => (
+                    {monthOptions.map((m) => (
                       <option key={m.value} value={m.value}>
                         {m.label}
                       </option>
