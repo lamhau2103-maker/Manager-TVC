@@ -79,6 +79,7 @@ interface VehicleRecord {
   type: string;
   brand_model: string;
   year?: number;
+  driver_id?: string | null;
   driver_name: string;
   department: string;
   status: string;
@@ -240,6 +241,7 @@ function sanitizeVehicle(raw: Record<string, unknown>, fallbackId?: string): Veh
     type: safeString(raw.type, 80, 'Xe bán tải') || 'Xe bán tải',
     brand_model: safeString(raw.brand_model, 120, 'Chưa cập nhật') || 'Chưa cập nhật',
     year: typeof raw.year === 'number' && Number.isFinite(raw.year) ? raw.year : undefined,
+    driver_id: typeof raw.driver_id === 'string' && raw.driver_id.trim() ? raw.driver_id.trim() : null,
     driver_name: safeString(raw.driver_name, 100, 'Chưa phân công') || 'Chưa phân công',
     department: safeString(raw.department, 80, 'Văn Phòng HCM') || 'Văn Phòng HCM',
     status: safeString(raw.status, 40, 'Đang hoạt động') || 'Đang hoạt động',

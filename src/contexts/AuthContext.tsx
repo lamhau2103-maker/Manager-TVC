@@ -96,19 +96,20 @@ function buildFallbackProfile(user: User): UserProfile {
 
 export async function loadProfileForUser(user: User): Promise<UserProfile> {
   try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('username, full_name, role, vehicle_plate')
-      .eq('id', user.id)
-      .maybeSingle();
+    const [profileRes, vehicleRes] = await Promise.all([
+      supabase.from('profiles').select('username, full_name, role').eq('id', user.id).maybeSingle(),
+      supabase.from('vehicles').select('plate').eq('driver_id', user.id).maybeSingle()
+    ]);
 
-    if (error || !data) {
+    const data = profileRes.data;
+    if (profileRes.error || !data) {
       return buildFallbackProfile(user);
     }
 
     const normalizedRole: UserRole =
       String(data.role ?? '').toLowerCase() === 'admin' ? 'admin' : 'user';
     const fallback = buildFallbackProfile(user);
+    const assignedPlate = vehicleRes.data?.plate ? String(vehicleRes.data.plate).trim() : null;
 
     return {
       username:
@@ -117,10 +118,7 @@ export async function loadProfileForUser(user: User): Promise<UserProfile> {
           : fallback.username,
       full_name: typeof data.full_name === 'string' ? data.full_name.trim() : '',
       role: normalizedRole,
-      vehicle_plate:
-        typeof data.vehicle_plate === 'string' && data.vehicle_plate.trim()
-          ? data.vehicle_plate.trim()
-          : null,
+      vehicle_plate: assignedPlate,
     };
   } catch {
     return buildFallbackProfile(user);

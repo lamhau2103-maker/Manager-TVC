@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowRightLeft,
   Database,
   FileSpreadsheet,
@@ -173,7 +174,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
             </div>
             <div className="p-3 rounded-xl bg-white/75 border border-slate-200/70">
               <div className="font-mono text-[11px] font-semibold text-slate-500 break-all">
-                maintenance_orders
+                maintenance_tickets
               </div>
               <div className="font-mono text-xl font-extrabold text-slate-900 tabular-nums mt-0.5">
                 {orderCount}
@@ -217,35 +218,51 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
               Xuất sao lưu Excel
             </button>
 
-            {confirmReset ? (
-              <div className="inline-flex items-center gap-1.5">
+            {isAdmin && (
+              <>
+                {confirmReset && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-md no-print">
+                    <div className="w-full max-w-md glass-panel-strong rounded-3xl p-6 shadow-2xl border border-red-200/90 space-y-4 animate-sheet-up">
+                      <div className="flex items-center gap-2.5 text-red-700">
+                        <AlertTriangle className="w-6 h-6 shrink-0" />
+                        <h3 className="text-base font-extrabold text-slate-950">
+                          Xác nhận khôi phục dữ liệu mẫu
+                        </h3>
+                      </div>
+                      <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+                        Cảnh báo nghiêm ngặt: Thao tác này sẽ xóa toàn bộ dữ liệu hiện có và thay thế bằng dữ liệu mẫu ban đầu. Thao tác này không thể hoàn tác.
+                      </p>
+                      <div className="flex items-center justify-end gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setConfirmReset(false)}
+                          className="min-h-[40px] px-4 rounded-xl bg-slate-200 text-slate-700 text-xs font-semibold"
+                        >
+                          Hủy
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onResetDemo();
+                            setConfirmReset(false);
+                          }}
+                          className="min-h-[40px] px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold"
+                        >
+                          Xác nhận lần 2: Đặt lại toàn bộ dữ liệu
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <button
                   type="button"
-                  onClick={() => {
-                    onResetDemo();
-                    setConfirmReset(false);
-                  }}
-                  className="min-h-[44px] sm:min-h-[38px] px-3 py-2 rounded-xl bg-red-600 text-white text-xs font-semibold"
+                  onClick={() => setConfirmReset(true)}
+                  className="inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl glass-input text-xs font-semibold text-slate-700 hover:text-red-700 touch-press"
                 >
-                  Xác nhận khôi phục
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Khôi phục dữ liệu mẫu
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmReset(false)}
-                  className="min-h-[44px] sm:min-h-[38px] px-3 py-2 rounded-xl bg-slate-200 text-slate-700 text-xs font-semibold"
-                >
-                  Hủy
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmReset(true)}
-                className="inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl glass-input text-xs font-semibold text-slate-700 hover:text-red-700 touch-press"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Khôi phục dữ liệu mẫu
-              </button>
+              </>
             )}
           </div>
         </div>

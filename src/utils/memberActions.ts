@@ -53,33 +53,55 @@ export async function fetchAllMemberProfiles(): Promise<{
   members: MemberProfileRow[];
   error: string | null;
 }> {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('id, username, full_name, role, vehicle_plate, created_at')
-    .eq('role', 'user')
-    .order('created_at', { ascending: false });
+  const [profileRes, vehicleRes] = await Promise.all([
+    supabase.from('profiles').select('id, username, full_name, role, created_at').eq('role', 'user'),
+    supabase.from('vehicles').select('id, plate, driver_id')
+  ]);
 
-  if (!error && Array.isArray(data)) {
-    return { members: data as MemberProfileRow[], error: null };
+  if (profileRes.error) {
+    const fallbackProfile = await supabase.from('profiles').select('id, username, full_name, role').eq('role', 'user');
+    if (fallbackProfile.error) {
+      return {
+        members: [],
+        error: fallbackProfile.error.message || 'Không tải được danh sách tài khoản thành viên.',
+      };
+    }
+    const vehiclesList = vehicleRes.data || [];
+    const driverToPlateMap = new Map<string, string>();
+    for (const v of vehiclesList) {
+      if (v.driver_id && v.plate) {
+        driverToPlateMap.set(v.driver_id, v.plate);
+      }
+    }
+    const members: MemberProfileRow[] = (fallbackProfile.data || []).map((p: any) => ({
+      id: p.id,
+      username: p.username,
+      full_name: p.full_name,
+      role: p.role,
+      vehicle_plate: driverToPlateMap.get(p.id) || null,
+      created_at: p.created_at,
+    }));
+    return { members, error: null };
   }
 
-  // Graceful fallback if `created_at` column is absent or unindexed for ordering
-  const fallback = await supabase
-    .from('profiles')
-    .select('id, username, full_name, role, vehicle_plate')
-    .eq('role', 'user');
-
-  if (fallback.error) {
-    return {
-      members: [],
-      error: fallback.error.message || 'Không tải được danh sách tài khoản thành viên.',
-    };
+  const vehiclesList = vehicleRes.data || [];
+  const driverToPlateMap = new Map<string, string>();
+  for (const v of vehiclesList) {
+    if (v.driver_id && v.plate) {
+      driverToPlateMap.set(v.driver_id, v.plate);
+    }
   }
 
-  return {
-    members: (fallback.data ?? []) as MemberProfileRow[],
-    error: null,
-  };
+  const members: MemberProfileRow[] = (profileRes.data || []).map((p: any) => ({
+    id: p.id,
+    username: p.username,
+    full_name: p.full_name,
+    role: p.role,
+    vehicle_plate: driverToPlateMap.get(p.id) || null,
+    created_at: p.created_at,
+  }));
+
+  return { members, error: null };
 }
 
 /**

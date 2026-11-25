@@ -28,6 +28,7 @@ export interface Vehicle {
   type: VehicleType;
   brand_model: string;
   year?: number;
+  driver_id?: string | null;
   driver_name: string;
   department: string;
   status: VehicleStatus;

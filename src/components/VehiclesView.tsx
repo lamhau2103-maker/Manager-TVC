@@ -422,12 +422,13 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
     // Step 2: Invoke Supabase Edge Function `create-member`
     setIsCreatingMember(true);
     try {
-      const { data, error } = await supabase.functions.invoke('create-member', {
+      const { data, error } = await supabase.functions.invoke('admin-users', {
         body: {
+          action: 'create',
           username: rawId,
           password: memberPassword,
           full_name: addedVehicle.driver_name,
-          vehicle_plate: addedVehicle.plate,
+          vehicle_id: addedVehicle.id,
         },
       });
 

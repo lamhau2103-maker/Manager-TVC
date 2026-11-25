@@ -68,12 +68,13 @@ export const CreateMemberModal: React.FC<CreateMemberModalProps> = ({
 
     setSubmitting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('create-member', {
+      const { data, error } = await supabase.functions.invoke('admin-users', {
         body: {
+          action: 'create',
           username: rawId,
           password,
           full_name: vehicle.driver_name,
-          vehicle_plate: vehicle.plate,
+          vehicle_id: vehicle.id,
         },
       });
 
@@ -331,19 +332,27 @@ export const TransferMemberModal: React.FC<TransferMemberModalProps> = ({
 
     setSubmitting(true);
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          vehicle_plate: selectedPlate,
-          full_name: trimmedName,
-        })
-        .eq('id', member.id);
+      // 1. Clear previous vehicle driver_id for this member
+      await supabase.from('vehicles').update({ driver_id: null }).eq('driver_id', member.id);
 
-      if (error) {
-        setErrorMsg(error.message || 'Không thể cập nhật thông tin điều chuyển.');
-        setSubmitting(false);
-        return;
+      // 2. Set driver_id on target vehicle if selected
+      if (selectedVehicleId) {
+        const { error: vError } = await supabase
+          .from('vehicles')
+          .update({
+            driver_id: member.id,
+            driver_name: trimmedName,
+          })
+          .eq('id', selectedVehicleId);
+
+        if (vError) {
+          setErrorMsg(vError.message || 'Không thể cập nhật xe đích.');
+          setSubmitting(false);
+          return;
+        }
       }
+
+      await supabase.from('profiles').update({ full_name: trimmedName }).eq('id', member.id);
 
       onSuccess(member.username, selectedPlate, selectedVehicleId, trimmedName);
     } catch (err) {
@@ -608,7 +617,7 @@ export const ResetPasswordModal: React.FC<ResetPasswordModalProps> = ({
 
     setSubmitting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('manage-member', {
+      const { data, error } = await supabase.functions.invoke('admin-users', {
         body: {
           action: 'reset_password',
           user_id: member.id,
@@ -792,7 +801,7 @@ export const DeleteMemberModal: React.FC<DeleteMemberModalProps> = ({
     setErrorMsg('');
     setSubmitting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('manage-member', {
+      const { data, error } = await supabase.functions.invoke('admin-users', {
         body: {
           action: 'delete',
           user_id: member.id,
