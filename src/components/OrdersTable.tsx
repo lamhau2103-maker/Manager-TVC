@@ -4,11 +4,20 @@ import {
   ChevronDown,
   ChevronRight,
   Edit3,
+  Filter,
   Plus,
+  RotateCcw,
   Trash2,
+  X,
 } from 'lucide-react';
 import { EnrichedOrder } from '../types';
 import { formatDateVN, formatKm, formatVND } from '../utils/format';
+
+interface CrossFilterChip {
+  key: string;
+  label: string;
+  clear: () => void;
+}
 
 interface OrdersTableProps {
   orders: EnrichedOrder[];
@@ -20,6 +29,8 @@ interface OrdersTableProps {
   onAddNew?: () => void;
   title?: string;
   subtitle?: string;
+  crossFilterChips?: CrossFilterChip[];
+  onClearAllCrossFilters?: () => void;
 }
 
 export const OrdersTable: React.FC<OrdersTableProps> = ({
@@ -32,6 +43,8 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
   onAddNew,
   title = 'Chi tiết các phiếu bảo dưỡng',
   subtitle = 'Bấm vào từng dòng để mở rộng toàn bộ hạng mục, phụ tùng và số PO chi tiết',
+  crossFilterChips = [],
+  onClearAllCrossFilters,
 }) => {
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -40,20 +53,65 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
     setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const hasCrossFilter = crossFilterChips.length > 0;
+
   return (
-    <div className="glass-panel rounded-2xl overflow-hidden">
-      <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200/70 flex flex-wrap items-center justify-between gap-2.5">
+    <div
+      className={`glass-panel rounded-2xl overflow-hidden ${
+        hasCrossFilter ? 'border-blue-400/90! ring-2 ring-blue-500/20' : ''
+      }`}
+    >
+      <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-white/70 bg-white/30 flex flex-wrap items-center justify-between gap-2.5">
         <div className="min-w-0 flex-1">
-          <h3 className="fluid-section-title font-bold text-slate-900 break-words">{title}</h3>
-          <p className="text-sm md:text-xs text-slate-500 mt-0.5 leading-relaxed break-words">{subtitle}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="fluid-section-title font-extrabold text-slate-950 break-words">{title}</h3>
+            {hasCrossFilter && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-600/12 border border-blue-400/35 text-[11px] font-bold text-blue-800">
+                <Filter className="w-3 h-3 shrink-0" />
+                Đang lọc theo biểu đồ / xe
+              </span>
+            )}
+          </div>
+          <p className="text-sm md:text-xs text-slate-600 mt-0.5 leading-relaxed break-words">{subtitle}</p>
         </div>
-        <div className="text-sm md:text-xs text-slate-600 tabular-nums shrink-0">
-          Hiển thị <strong className="text-slate-900">{orders.length}</strong> phiếu · Tổng{' '}
+        <div className="text-sm md:text-xs text-slate-700 tabular-nums shrink-0">
+          Hiển thị <strong className="text-slate-950">{orders.length}</strong> phiếu · Tổng{' '}
           <strong className="font-mono text-blue-700">
             {formatVND(orders.reduce((s, o) => s + o.totalAmount, 0))}
           </strong>
         </div>
       </div>
+
+      {hasCrossFilter && (
+        <div className="px-4 sm:px-5 py-2.5 bg-blue-500/8 border-b border-blue-300/40 backdrop-blur-sm flex flex-wrap items-center justify-between gap-2 no-print">
+          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+            <span className="text-xs font-semibold text-blue-950 whitespace-nowrap">
+              Đang lọc chi tiết:
+            </span>
+            {crossFilterChips.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={chip.clear}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/85 border border-blue-300/70 hover:bg-white text-blue-800 text-xs font-semibold shadow-2xs transition-colors"
+              >
+                <span>{chip.label}</span>
+                <X className="w-3.5 h-3.5 shrink-0" />
+              </button>
+            ))}
+          </div>
+          {onClearAllCrossFilters && (
+            <button
+              type="button"
+              onClick={onClearAllCrossFilters}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/85 border border-red-200 text-red-700 hover:bg-red-50 text-xs font-bold whitespace-nowrap transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+              Xóa lọc
+            </button>
+          )}
+        </div>
+      )}
 
       {orders.length === 0 ? (
         <div className="p-8 sm:p-10 text-center space-y-3">
@@ -64,7 +122,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
             <button
               type="button"
               onClick={onAddNew}
-              className="inline-flex items-center justify-center gap-1.5 min-h-[44px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors touch-press"
+              className="inline-flex items-center justify-center gap-1.5 min-h-[44px] px-4 py-2 rounded-xl glass-button-primary text-white text-xs font-semibold touch-press"
             >
               <Plus className="w-4 h-4" />
               Thêm phiếu bảo dưỡng đầu tiên

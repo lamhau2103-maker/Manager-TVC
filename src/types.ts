@@ -99,6 +99,7 @@ export interface GlobalFilters {
 export type AppPage = 'dashboard' | 'orders' | 'vehicles' | 'po' | 'settings';
 
 export type DashboardBlockId =
+  | 'kpi_summary'
   | 'monthly_status'
   | 'alerts'
   | 'charts'

@@ -41,6 +41,8 @@ interface GlobalFilterBarProps {
   onRefresh: () => void;
   onExportExcel: () => void;
   onExportPdf: () => void;
+  demoMode?: boolean;
+  onToggleDemoMode?: () => void;
 }
 
 export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
@@ -55,6 +57,8 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
   onRefresh,
   onExportExcel,
   onExportPdf,
+  demoMode = false,
+  onToggleDemoMode,
 }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -310,13 +314,13 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
     <>
       <section
         aria-label="Bộ lọc toàn cục"
-        className="glass-panel-strong rounded-2xl p-3 sm:p-4 no-print space-y-2.5 w-full min-w-0"
+        className="glass-panel-strong rounded-2xl p-3.5 sm:p-4 no-print space-y-2.5 w-full min-w-0"
       >
         {/* Controls Row: Mobile stacks cleanly; Desktop wraps horizontally */}
         <div className="flex flex-col md:flex-row md:flex-wrap md:items-center gap-2.5 justify-between min-w-0">
           <div className="flex flex-col md:flex-row md:flex-wrap md:items-center gap-2 min-w-0 flex-1">
-            {/* Period Preset Segmented Control: 4 equal columns on mobile, inline on >=768px */}
-            <div className="grid grid-cols-4 md:inline-flex items-center p-1 rounded-xl glass-segment w-full md:w-auto gap-0.5">
+            {/* Period Preset Segmented Control */}
+            <div className="grid grid-cols-4 md:inline-flex items-center p-1.5 rounded-2xl glass-segment w-full md:w-auto gap-1.5">
               {(
                 [
                   { id: 'month', label: 'Tháng' },
@@ -329,10 +333,10 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
                   key={opt.id}
                   type="button"
                   onClick={() => onChange({ periodPreset: opt.id })}
-                  className={`min-h-[40px] md:min-h-[34px] px-1.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap text-center truncate touch-press ${
+                  className={`min-h-[40px] md:min-h-[34px] px-2 sm:px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap text-center truncate ${
                     filters.periodPreset === opt.id
-                      ? 'bg-white/95 text-blue-700 shadow-xs'
-                      : 'text-slate-700 hover:text-slate-950'
+                      ? 'tab-3d-active'
+                      : 'tab-3d'
                   }`}
                 >
                   {opt.label}
@@ -344,12 +348,12 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:flex-wrap md:items-center gap-2 w-full md:w-auto min-w-0">
               {filters.periodPreset === 'month' && (
                 <div className="relative flex items-center w-full md:w-auto md:min-w-[164px]">
-                  <Calendar className="w-4 h-4 text-slate-500 absolute left-3 pointer-events-none" />
+                  <Calendar className="w-4 h-4 text-blue-600 absolute left-3 pointer-events-none z-10" />
                   <select
                     aria-label="Chọn tháng báo cáo"
                     value={filters.selectedMonth}
                     onChange={(e) => onChange({ selectedMonth: e.target.value })}
-                    className="glass-input w-full min-h-[44px] md:min-h-[38px] pl-9 pr-7 rounded-xl text-sm md:text-xs font-semibold text-slate-800"
+                    className="glass-input w-full min-h-[44px] md:min-h-[38px] pl-9 pr-7 rounded-xl text-sm md:text-xs font-semibold text-slate-900"
                   >
                     {monthOptions.map((m) => (
                       <option key={m.value} value={m.value}>
@@ -369,7 +373,7 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
                     onChange={(e) => onChange({ customStartDate: e.target.value })}
                     className="glass-input w-full md:w-auto min-h-[44px] md:min-h-[38px] px-3 rounded-xl text-sm md:text-xs font-mono"
                   />
-                  <span className="hidden md:inline text-xs text-slate-400">→</span>
+                  <span className="hidden md:inline text-xs text-slate-500">→</span>
                   <input
                     type="date"
                     aria-label="Đến ngày"
@@ -384,10 +388,10 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
               <button
                 type="button"
                 onClick={() => setShowAdvanced((s) => !s)}
-                className={`w-full md:w-auto inline-flex items-center justify-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3.5 rounded-xl text-sm md:text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 touch-press ${
+                className={`w-full md:w-auto inline-flex items-center justify-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3.5 rounded-xl text-sm md:text-xs font-semibold border transition-all whitespace-nowrap shrink-0 touch-press ${
                   showAdvanced || activeChips.length > 0
-                    ? 'bg-blue-50 border-blue-200 text-blue-700'
-                    : 'glass-input text-slate-800'
+                    ? 'bg-blue-600/12 border-blue-400/50 text-blue-800 shadow-xs'
+                    : 'glass-tile text-slate-700 hover:text-slate-950'
                 }`}
               >
                 <SlidersHorizontal className="w-4 h-4 md:w-3.5 md:h-3.5 shrink-0" />
@@ -401,21 +405,21 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
             </div>
           </div>
 
-          {/* Right: Export PDF / Excel — equal 2-col grid on mobile, inline flex on >=768px */}
+          {/* Right: Export PDF / Excel */}
           <div className="grid grid-cols-2 md:flex md:items-center gap-2 w-full md:w-auto shrink-0">
             <button
               type="button"
               onClick={onExportPdf}
-              className="w-full md:w-auto inline-flex items-center justify-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3.5 rounded-xl text-sm md:text-xs font-semibold text-slate-800 glass-tile hover:bg-white/85 transition-all whitespace-nowrap shrink-0 touch-press"
+              className="w-full md:w-auto inline-flex items-center justify-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3.5 rounded-xl text-sm md:text-xs font-semibold text-slate-800 glass-tile transition-all whitespace-nowrap shrink-0 touch-press"
             >
-              <Printer className="w-4 h-4 md:w-3.5 md:h-3.5 text-slate-700 shrink-0" />
+              <Printer className="w-4 h-4 md:w-3.5 md:h-3.5 text-slate-600 shrink-0" />
               <span>Xuất PDF</span>
             </button>
 
             <button
               type="button"
               onClick={onExportExcel}
-              className="w-full md:w-auto inline-flex items-center justify-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3.5 rounded-xl text-sm md:text-xs font-semibold text-white bg-emerald-600/95 hover:bg-emerald-700 border border-emerald-300/50 shadow-sm shadow-emerald-700/20 transition-all whitespace-nowrap shrink-0 touch-press"
+              className="w-full md:w-auto inline-flex items-center justify-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3.5 rounded-xl text-sm md:text-xs font-semibold text-white bg-linear-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 border border-emerald-500/40 shadow-md shadow-emerald-700/20 transition-all whitespace-nowrap shrink-0 touch-press"
             >
               <FileSpreadsheet className="w-4 h-4 md:w-3.5 md:h-3.5 shrink-0" />
               <span>Xuất Excel</span>
@@ -423,18 +427,18 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
           </div>
         </div>
 
-        {/* Desktop Collapsible Advanced Filters Grid (>= 768px) */}
+        {/* Desktop Collapsible Advanced Filters Grid */}
         {showAdvanced && (
-          <div className="hidden md:block pt-3 border-t border-slate-200/70">
+          <div className="hidden md:block pt-3 border-t border-white/75">
             {renderAdvancedFields()}
           </div>
         )}
 
-        {/* Bottom Meta Row: Active filter chips + Clean Wrapping Sync Timestamp */}
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-0.5">
+        {/* Bottom Meta Row: Active filter chips + Clean Wrapping Sync Timestamp + Demo Mode Switch */}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-2 border-t border-slate-300/35">
           {activeChips.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-              <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 mr-0.5 whitespace-nowrap">
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 mr-0.5 whitespace-nowrap">
                 <Filter className="w-3.5 h-3.5 shrink-0" />
                 Đang lọc:
               </span>
@@ -443,7 +447,7 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
                   key={chip.key}
                   type="button"
                   onClick={chip.clear}
-                  className="inline-flex items-center gap-1 min-h-[32px] px-2.5 py-1 rounded-lg bg-blue-600/10 hover:bg-blue-600/20 text-blue-800 text-xs font-semibold transition-colors max-w-full"
+                  className="inline-flex items-center gap-1 min-h-[32px] px-2.5 py-1 rounded-lg bg-blue-600/10 border border-blue-400/35 hover:bg-blue-600/18 text-blue-800 text-xs font-semibold transition-colors max-w-full"
                 >
                   <span className="truncate">{chip.label}</span>
                   <X className="w-3.5 h-3.5 shrink-0" />
@@ -452,7 +456,7 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
               <button
                 type="button"
                 onClick={onResetAll}
-                className="inline-flex items-center gap-1 min-h-[32px] px-2.5 py-1 rounded-lg text-xs font-semibold text-red-600 hover:bg-red-50 transition-colors whitespace-nowrap"
+                className="inline-flex items-center gap-1 min-h-[32px] px-2.5 py-1 rounded-lg text-xs font-semibold text-red-700 hover:bg-red-500/10 transition-colors whitespace-nowrap"
               >
                 <RotateCcw className="w-3.5 h-3.5 shrink-0" />
                 Xóa tất cả
@@ -460,26 +464,55 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
             </div>
           )}
 
-          {/* Sync Status Line — clean wrap, never breaks word-by-word */}
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600 ml-auto">
+          {/* Sync Status Line + Demo Toggle */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-700 ml-auto">
             <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
               <span className="relative flex h-2 w-2 shrink-0" title="Đang kết nối dữ liệu thời gian thực">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
               </span>
               <span>Cập nhật lần cuối:</span>
-              <strong className="font-mono font-semibold text-slate-800 tabular-nums">
+              <strong className="font-mono font-bold text-slate-900 tabular-nums">
                 {formatDateTimeVN(lastUpdated)}
               </strong>
             </span>
+
             <button
               type="button"
               onClick={onRefresh}
-              className="inline-flex items-center gap-1 px-2 py-1 -my-1 rounded-lg text-blue-700 hover:bg-blue-50 font-semibold whitespace-nowrap transition-colors touch-press"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-blue-700 hover:bg-blue-600/10 font-semibold whitespace-nowrap transition-colors touch-press"
             >
               <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
               <span>Làm mới</span>
             </button>
+
+            {onToggleDemoMode && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={demoMode}
+                onClick={onToggleDemoMode}
+                title="Bật để xem thử biểu đồ & báo cáo mẫu (không lưu vào Supabase)"
+                className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg border text-xs font-semibold whitespace-nowrap transition-all touch-press ${
+                  demoMode
+                    ? 'bg-indigo-600/12 border-indigo-400/45 text-indigo-900 shadow-xs'
+                    : 'bg-white/60 border-white/85 text-slate-700 hover:text-slate-950 hover:bg-white/85'
+                }`}
+              >
+                <span>Chế độ dữ liệu mẫu</span>
+                <span
+                  className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
+                    demoMode ? 'bg-indigo-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3 w-3 transform rounded-full bg-white shadow-xs transition-transform ${
+                      demoMode ? 'translate-x-3.5' : 'translate-x-0.5'
+                    }`}
+                  />
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -487,16 +520,16 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
       {/* Mobile Full-Screen Bottom Sheet Modal for Advanced Filters (< 768px) */}
       {showAdvanced && (
         <div
-          className="md:hidden fixed inset-0 z-50 flex items-end justify-center bg-slate-900/45 backdrop-blur-sm no-print"
+          className="md:hidden fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 backdrop-blur-sm no-print"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setShowAdvanced(false);
           }}
         >
-          <div className="w-full max-h-[90dvh] flex flex-col glass-panel-strong rounded-t-3xl overflow-hidden shadow-2xl border-t border-white/90 animate-sheet-up">
+          <div className="w-full max-h-[90dvh] flex flex-col glass-panel-strong rounded-t-3xl overflow-hidden shadow-2xl border-t border-white/95 animate-sheet-up">
             <div className="flex justify-center pt-2.5 pb-1">
               <span className="w-10 h-1 rounded-full bg-slate-300/90" />
             </div>
-            <div className="px-4 py-3 border-b border-slate-200/75 flex items-center justify-between gap-2">
+            <div className="px-4 py-3 border-b border-white/75 flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <h3 className="text-base font-extrabold text-slate-950 truncate">
                   Bộ lọc chi tiết
@@ -517,13 +550,13 @@ export const GlobalFilterBar: React.FC<GlobalFilterBarProps> = ({
 
             <div className="flex-1 overflow-y-auto p-4">{renderAdvancedFields()}</div>
 
-            <div className="px-4 py-3 border-t border-slate-200/75 bg-white/85 flex items-center gap-2 safe-bottom">
+            <div className="px-4 py-3 border-t border-white/75 bg-white/80 backdrop-blur-md flex items-center gap-2 safe-bottom">
               <button
                 type="button"
                 onClick={() => {
                   onResetAll();
                 }}
-                className="flex-1 min-h-[44px] px-3 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold"
+                className="flex-1 min-h-[44px] px-3 rounded-xl bg-slate-200/80 text-slate-800 text-sm font-semibold"
               >
                 Xóa bộ lọc
               </button>

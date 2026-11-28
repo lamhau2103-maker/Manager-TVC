@@ -26,6 +26,7 @@ const DEFAULT_MONTHLY_BUDGET = 320_000_000;
 const META_MARKER = '\n[META:';
 
 const DEFAULT_DASHBOARD_BLOCK_ORDER: DashboardBlockId[] = [
+  'kpi_summary',
   'monthly_status',
   'alerts',
   'charts',
@@ -241,6 +242,9 @@ function normalizeBlockOrder(order?: unknown): DashboardBlockId[] {
         result.push(item as DashboardBlockId);
       }
     }
+  }
+  if (!result.includes('kpi_summary')) {
+    result.unshift('kpi_summary');
   }
   for (const id of DEFAULT_DASHBOARD_BLOCK_ORDER) {
     if (!result.includes(id)) result.push(id);

@@ -1,15 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  ArrowDown,
-  ArrowUp,
+  Calendar,
   CheckCircle2,
-  ChevronDown,
   ClipboardList,
-  Eye,
-  EyeOff,
   FileSpreadsheet,
-  GripVertical,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -19,12 +14,13 @@ import {
   Search,
   Settings,
   Shield,
+  Sparkles,
   Truck,
   Upload,
   User,
   X,
 } from 'lucide-react';
-import { AppPage, DashboardBlockId, EnrichedOrder, GlobalFilters } from './types';
+import { AppPage, DashboardBlockId, EnrichedOrder, GlobalFilters, Vehicle } from './types';
 import { useFleetStore } from './store/useFleetStore';
 import { useAuth } from './contexts/AuthContext';
 import { LoginLamp } from './components/LoginLamp';
@@ -43,6 +39,7 @@ import {
   resolveDateRange,
   resolvePreviousRange,
 } from './utils/analytics';
+import { buildDemoDataset } from './utils/demoData';
 import { exportReportToExcel } from './utils/excel';
 import {
   formatDateTimeVN,
@@ -53,8 +50,9 @@ import {
   getMonthDateRange,
   getPreviousMonth,
 } from './utils/format';
-import { isVehicleAssignedToUser } from './utils/plate';
+import { isVehicleAssignedToUser, normalizePlateKey } from './utils/plate';
 import { GlobalFilterBar } from './components/GlobalFilterBar';
+import { KpiSummaryRow } from './components/KpiSummaryRow';
 import { ComparisonOverview } from './components/ComparisonOverview';
 import { PriorityAlertsPanel } from './components/PriorityAlertsPanel';
 import { DashboardCharts } from './components/DashboardCharts';
@@ -65,6 +63,9 @@ import { SettingsAuditView } from './components/SettingsAuditView';
 import { OrderFormModal } from './components/OrderFormModal';
 import { ExcelImportModal } from './components/ExcelImportModal';
 import { GlobalSearchModal } from './components/GlobalSearchModal';
+import { VehicleQuickDrawer } from './components/VehicleQuickDrawer';
+import { DisplayCustomizePopover } from './components/DisplayCustomizePopover';
+import { DashboardSkeleton } from './components/DashboardSkeleton';
 
 function createDefaultFilters(): GlobalFilters {
   const currentYM = getCurrentYearMonth();
@@ -103,7 +104,8 @@ const COMPANY_LOGO_SRC =
   '/assets/aistudio/23-logo-thai-viet-corporation-removebg-preview__1__370dbc13.png';
 
 const DASHBOARD_BLOCK_LABELS: Record<DashboardBlockId, string> = {
-  monthly_status: 'Thông tin bảo dưỡng trong tháng ( đến hiện tại )',
+  kpi_summary: '4 thẻ chỉ số KPI tổng quan',
+  monthly_status: 'THÔNG TIN DỮ LIỆU TRONG THÁNG',
   alerts: 'Góc Cảnh Báo Khẩn',
   charts: 'Biểu đồ phân tích chi tiết',
   orders_table: 'Bảng chi tiết phiếu bảo dưỡng',
@@ -171,7 +173,26 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
 
   const [tabletDrawerOpen, setTabletDrawerOpen] = useState(false);
   const [mobileUserMenuOpen, setMobileUserMenuOpen] = useState(false);
-  const [mobileAdminControlsOpen, setMobileAdminControlsOpen] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+  const [drawerVehicleId, setDrawerVehicleId] = useState<string | null>(null);
+  const [isPeriodSwitching, setIsPeriodSwitching] = useState(false);
+  const periodInitRef = useRef(true);
+
+  useEffect(() => {
+    if (periodInitRef.current) {
+      periodInitRef.current = false;
+      return;
+    }
+    setIsPeriodSwitching(true);
+    const timer = window.setTimeout(() => setIsPeriodSwitching(false), 260);
+    return () => window.clearTimeout(timer);
+  }, [
+    filters.periodPreset,
+    filters.selectedMonth,
+    filters.customStartDate,
+    filters.customEndDate,
+    demoMode,
+  ]);
 
   // Keep AuthContext driver name reactively synced whenever fleet vehicle data changes
   useEffect(() => {
@@ -220,8 +241,6 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   const [preselectedVehicleId, setPreselectedVehicleId] = useState<string | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
-  const [draggingBlockId, setDraggingBlockId] = useState<DashboardBlockId | null>(null);
-  const [dragOverBlockId, setDragOverBlockId] = useState<DashboardBlockId | null>(null);
 
   // Global keyboard shortcuts: Ctrl+K / Cmd+K / "/"
   useEffect(() => {
@@ -261,32 +280,46 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     }));
   };
 
-  // ==================== ANALYTICS DERIVATIONS ====================
+  // ==================== DATASET & ANALYTICS DERIVATIONS ====================
+  const activeDataset = useMemo(() => {
+    if (demoMode) {
+      return buildDemoDataset(
+        store.vehicles,
+        filters.selectedMonth || getCurrentYearMonth()
+      );
+    }
+    return {
+      vehicles: store.vehicles,
+      orders: store.orders,
+      items: store.items,
+    };
+  }, [demoMode, store.vehicles, store.orders, store.items, filters.selectedMonth]);
+
   const currentRange = useMemo(() => resolveDateRange(filters), [filters]);
   const prevRange = useMemo(() => resolvePreviousRange(filters), [filters]);
 
   const currentFiltered = useMemo(
     () =>
       filterEnrichedOrders(
-        store.vehicles,
-        store.orders,
-        store.items,
+        activeDataset.vehicles,
+        activeDataset.orders,
+        activeDataset.items,
         filters,
         currentRange
       ),
-    [store.vehicles, store.orders, store.items, filters, currentRange]
+    [activeDataset.vehicles, activeDataset.orders, activeDataset.items, filters, currentRange]
   );
 
   const prevFiltered = useMemo(
     () =>
       filterEnrichedOrders(
-        store.vehicles,
-        store.orders,
-        store.items,
+        activeDataset.vehicles,
+        activeDataset.orders,
+        activeDataset.items,
         filters,
         prevRange
       ),
-    [store.vehicles, store.orders, store.items, filters, prevRange]
+    [activeDataset.vehicles, activeDataset.orders, activeDataset.items, filters, prevRange]
   );
 
   const currentMetrics = useMemo(
@@ -294,10 +327,10 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
       computePeriodMetrics(
         currentFiltered.orders,
         currentFiltered.items,
-        store.orders,
-        store.vehicles.length
+        activeDataset.orders,
+        activeDataset.vehicles.length
       ),
-    [currentFiltered, store.orders, store.vehicles.length]
+    [currentFiltered, activeDataset.orders, activeDataset.vehicles.length]
   );
 
   const prevMetrics = useMemo(
@@ -305,27 +338,39 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
       computePeriodMetrics(
         prevFiltered.orders,
         prevFiltered.items,
-        store.orders,
-        store.vehicles.length
+        activeDataset.orders,
+        activeDataset.vehicles.length
       ),
-    [prevFiltered, store.orders, store.vehicles.length]
+    [prevFiltered, activeDataset.orders, activeDataset.vehicles.length]
   );
 
   const sixMonthSeries = useMemo(
-    () => buildSixMonthSeries(store.vehicles, store.orders, store.items, filters),
-    [store.vehicles, store.orders, store.items, filters]
+    () =>
+      buildSixMonthSeries(
+        activeDataset.vehicles,
+        activeDataset.orders,
+        activeDataset.items,
+        filters
+      ),
+    [activeDataset.vehicles, activeDataset.orders, activeDataset.items, filters]
   );
 
   const alerts = useMemo(
     () =>
       computePriorityAlerts(
-        store.vehicles,
-        store.orders,
-        store.items,
+        activeDataset.vehicles,
+        activeDataset.orders,
+        activeDataset.items,
         currentFiltered.orders,
         currentRange.label
       ),
-    [store.vehicles, store.orders, store.items, currentFiltered.orders, currentRange.label]
+    [
+      activeDataset.vehicles,
+      activeDataset.orders,
+      activeDataset.items,
+      currentFiltered.orders,
+      currentRange.label,
+    ]
   );
 
   const dailyData = useMemo(
@@ -374,36 +419,41 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   const currentMonthFiltered = useMemo(
     () =>
       filterEnrichedOrders(
-        store.vehicles,
-        store.orders,
-        store.items,
+        activeDataset.vehicles,
+        activeDataset.orders,
+        activeDataset.items,
         filters,
         getMonthDateRange(currentYearMonth)
       ),
-    [store.vehicles, store.orders, store.items, filters, currentYearMonth]
+    [activeDataset.vehicles, activeDataset.orders, activeDataset.items, filters, currentYearMonth]
   );
 
   const prevCalendarMonthFiltered = useMemo(
     () =>
       filterEnrichedOrders(
-        store.vehicles,
-        store.orders,
-        store.items,
+        activeDataset.vehicles,
+        activeDataset.orders,
+        activeDataset.items,
         filters,
         getMonthDateRange(prevCalendarMonth)
       ),
-    [store.vehicles, store.orders, store.items, filters, prevCalendarMonth]
+    [activeDataset.vehicles, activeDataset.orders, activeDataset.items, filters, prevCalendarMonth]
   );
 
   const vehicleStatuses = useMemo(
     () =>
       buildMonthlyVehicleStatus(
-        store.vehicles,
+        activeDataset.vehicles,
         currentMonthFiltered.orders,
         prevCalendarMonthFiltered.orders,
         filters
       ),
-    [store.vehicles, currentMonthFiltered.orders, prevCalendarMonthFiltered.orders, filters]
+    [
+      activeDataset.vehicles,
+      currentMonthFiltered.orders,
+      prevCalendarMonthFiltered.orders,
+      filters,
+    ]
   );
 
   const poData = useMemo(
@@ -421,16 +471,104 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     [currentFiltered.items]
   );
 
+  const drawerVehicle = useMemo(
+    () =>
+      drawerVehicleId
+        ? activeDataset.vehicles.find((v) => v.id === drawerVehicleId) ?? null
+        : null,
+    [drawerVehicleId, activeDataset.vehicles]
+  );
+
+  const crossFilterChips = useMemo(() => {
+    const chips: Array<{ key: string; label: string; clear: () => void }> = [];
+    if (filters.plateKey) {
+      chips.push({
+        key: 'plate',
+        label: `Biển số: ${filters.plateKey}`,
+        clear: () => updateFilters({ plateKey: '' }),
+      });
+    }
+    if (filters.category) {
+      chips.push({
+        key: 'cat',
+        label: `Nhóm: ${filters.category}`,
+        clear: () => updateFilters({ category: '' }),
+      });
+    }
+    if (filters.poNumber) {
+      chips.push({
+        key: 'po',
+        label: filters.poNumber === '__MISSING__' ? 'PO: Thiếu số PO' : `PO: ${filters.poNumber}`,
+        clear: () => updateFilters({ poNumber: '' }),
+      });
+    }
+    if (filters.serviceType) {
+      chips.push({
+        key: 'stype',
+        label: `Loại BD: ${filters.serviceType}`,
+        clear: () => updateFilters({ serviceType: '' }),
+      });
+    }
+    if (filters.action) {
+      chips.push({
+        key: 'action',
+        label: `Hành động: ${filters.action}`,
+        clear: () => updateFilters({ action: '' }),
+      });
+    }
+    if (filters.garage) {
+      chips.push({
+        key: 'garage',
+        label: `Gara: ${filters.garage}`,
+        clear: () => updateFilters({ garage: '' }),
+      });
+    }
+    if (filters.department) {
+      chips.push({
+        key: 'dept',
+        label: `Bộ phận: ${filters.department}`,
+        clear: () => updateFilters({ department: '' }),
+      });
+    }
+    if (filters.vehicleType) {
+      chips.push({
+        key: 'vtype',
+        label: `Loại xe: ${filters.vehicleType}`,
+        clear: () => updateFilters({ vehicleType: '' }),
+      });
+    }
+    if (filters.searchQuery.trim()) {
+      chips.push({
+        key: 'q',
+        label: `Từ khóa: "${filters.searchQuery.trim()}"`,
+        clear: () => updateFilters({ searchQuery: '' }),
+      });
+    }
+    return chips;
+  }, [filters]);
+
   // ==================== HANDLERS ====================
   const openVehicleProfile = (vehicleId: string, plate?: string) => {
     if (plate) store.pushRecentPlate(plate);
     else {
-      const v = store.vehicles.find((x) => x.id === vehicleId);
+      const v = activeDataset.vehicles.find((x) => x.id === vehicleId);
       if (v) store.pushRecentPlate(v.plate);
+    }
+    if (demoMode) {
+      setDrawerVehicleId(vehicleId);
+      return;
     }
     setSelectedVehicleId(vehicleId);
     setActivePage('vehicles');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleToggleCrossFilterPlate = (vehicle: Vehicle) => {
+    const targetKey = normalizePlateKey(vehicle.plate);
+    const activeKey = normalizePlateKey(filters.plateKey);
+    updateFilters({
+      plateKey: activeKey === targetKey ? '' : vehicle.plate,
+    });
   };
 
   const openNewOrder = (vehId?: string | null) => {
@@ -460,7 +598,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   };
 
   const openEditOrder = (order: EnrichedOrder) => {
-    if (!isAdmin) return;
+    if (!isAdmin || demoMode) return;
     setEditingOrder(order);
     setPreselectedVehicleId(null);
     setOrderModalOpen(true);
@@ -478,7 +616,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
   };
 
   const handleExportExcel = () => {
-    exportReportToExcel(currentRange.label, currentFiltered.orders, store.vehicles);
+    exportReportToExcel(currentRange.label, currentFiltered.orders, activeDataset.vehicles);
     showToast(`Đã xuất file Excel báo cáo ${currentRange.label}.`);
   };
 
@@ -490,16 +628,6 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
 
   const isBlockHidden = (block: DashboardBlockId) =>
     store.hiddenDashboardBlocks.includes(block);
-
-  const defaultBlockOrder: DashboardBlockId[] = [
-    'monthly_status',
-    'alerts',
-    'charts',
-    'orders_table',
-  ];
-  const hasCustomBlockOrder = store.dashboardBlockOrder.some(
-    (id, idx) => id !== defaultBlockOrder[idx]
-  );
 
   const visibleNavItems = isAdmin
     ? effectiveAdminMode
@@ -555,24 +683,31 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
     return store.bulkAddPlates(rawEntries, defaultType, defaultDepartment);
   };
 
+  const isDashboardLoading = store.isSyncing || isPeriodSwitching;
+  const isEmptyPeriod =
+    !demoMode &&
+    !isDashboardLoading &&
+    currentMetrics.totalCost === 0 &&
+    currentFiltered.orders.length === 0;
+
   return (
-    <div className="min-h-dvh flex text-slate-900 relative overflow-x-hidden max-w-[1600px] w-full mx-auto">
-      {/* Ambient refractive orbs behind glass surfaces */}
-      <div className="glass-backdrop" aria-hidden="true">
-        <div className="glass-orb glass-orb-1" />
-        <div className="glass-orb glass-orb-2" />
-        <div className="glass-orb glass-orb-3" />
+    <div className="min-h-dvh flex bg-transparent text-slate-900 relative overflow-x-hidden w-full">
+      {/* Atmospheric Ambient Refraction Layer */}
+      <div className="glass-backdrop no-print" aria-hidden="true">
+        <div className="glass-orb glass-orb-sapphire" />
+        <div className="glass-orb glass-orb-indigo" />
+        <div className="glass-orb glass-orb-teal" />
       </div>
 
-      {/* Tablet Collapsed Icon-Only Rail (768px - 1023px) */}
+      {/* Tablet Collapsed Icon-Only Rail (768px - 1023px) — Deep Navy Glass */}
       <aside
         aria-label="Thanh điều hướng thu gọn"
-        className="hidden md:flex lg:hidden flex-col w-[76px] shrink-0 p-3 pr-0 no-print relative z-20"
+        className="hidden md:flex lg:hidden flex-col w-[76px] shrink-0 glass-sidebar text-slate-200 no-print relative z-20"
       >
-        <div className="sticky top-3 h-[calc(100dvh-1.5rem)] glass-panel-strong rounded-2xl py-3 px-2 flex flex-col items-center justify-between">
+        <div className="sticky top-0 h-[100dvh] py-4 px-2.5 flex flex-col items-center justify-between">
           <div className="flex flex-col items-center gap-3 w-full">
             <div
-              className="w-10 h-10 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden"
+              className="w-10 h-10 rounded-xl bg-white/95 p-1.5 flex items-center justify-center shadow-lg shadow-blue-950/40 ring-1 ring-white/40 shrink-0 overflow-hidden"
               title="THAI VIET CORPORATION"
             >
               <img
@@ -587,14 +722,14 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               onClick={() => setTabletDrawerOpen(true)}
               title="Mở rộng thanh điều hướng"
               aria-label="Mở rộng thanh điều hướng"
-              className="w-11 h-11 rounded-xl glass-tile text-slate-700 hover:text-blue-700 hover:bg-white/85 flex items-center justify-center transition-colors touch-press"
+              className="w-11 h-11 rounded-xl bg-white/8 border border-white/15 text-slate-200 hover:text-white hover:bg-white/15 flex items-center justify-center transition-colors touch-press"
             >
               <PanelLeftOpen className="w-5 h-5" />
             </button>
 
-            <div className="w-8 h-px bg-slate-200/80" />
+            <div className="w-8 h-px bg-white/12" />
 
-            <nav aria-label="Điều hướng máy tính bảng" className="flex flex-col items-center gap-1.5 w-full">
+            <nav aria-label="Điều hướng máy tính bảng" className="flex flex-col items-center gap-2 w-full">
               {visibleNavItems.map((item) => {
                 const Icon = item.icon;
                 const active = activePage === item.id;
@@ -612,15 +747,15 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     onClick={() => navigateToPage(item.id)}
                     title={item.label}
                     aria-label={item.label}
-                    className={`relative w-11 h-11 rounded-xl flex items-center justify-center transition-all touch-press ${
+                    className={`relative w-11 h-11 rounded-xl flex items-center justify-center ${
                       active
-                        ? 'glass-button-primary text-white'
-                        : 'text-slate-700 hover:text-slate-950 hover:bg-white/60'
+                        ? 'nav-tab-3d-active'
+                        : 'nav-tab-3d text-slate-300 hover:text-white'
                     }`}
                   >
                     <Icon className="w-5 h-5" />
                     {badgeCount > 0 && (
-                      <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white font-mono text-[10px] font-bold flex items-center justify-center shadow-xs">
+                      <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white font-mono text-[10px] font-bold flex items-center justify-center shadow-xs">
                         {badgeCount}
                       </span>
                     )}
@@ -630,14 +765,14 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
             </nav>
           </div>
 
-          <div className="flex flex-col items-center gap-1.5 pt-3 border-t border-slate-200/70 w-full">
+          <div className="flex flex-col items-center gap-1.5 pt-3 border-t border-white/12 w-full">
             {isAdmin && (
               <button
                 type="button"
                 onClick={() => setImportModalOpen(true)}
                 title="Nhập Excel / CSV (UPSERT)"
                 aria-label="Nhập Excel / CSV"
-                className="w-11 h-11 rounded-xl glass-tile text-slate-700 hover:text-blue-700 flex items-center justify-center transition-colors touch-press"
+                className="w-11 h-11 rounded-xl bg-white/8 border border-white/15 text-slate-200 hover:text-white hover:bg-white/15 flex items-center justify-center transition-colors touch-press"
               >
                 <Upload className="w-4.5 h-4.5" />
               </button>
@@ -649,7 +784,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               }}
               title="Đăng xuất"
               aria-label="Đăng xuất"
-              className="w-11 h-11 rounded-xl glass-tile text-slate-700 hover:text-red-700 hover:bg-red-50/85 flex items-center justify-center transition-colors touch-press"
+              className="w-11 h-11 rounded-xl bg-white/6 border border-white/12 text-slate-300 hover:text-red-300 hover:bg-red-500/20 flex items-center justify-center transition-colors touch-press"
             >
               <LogOut className="w-4.5 h-4.5" />
             </button>
@@ -657,13 +792,13 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         </div>
       </aside>
 
-      {/* Desktop Sidebar (Laptop & Large Desktop >= 1024px) */}
-      <aside className="hidden lg:flex lg:flex-col w-64 shrink-0 p-4 pr-0 no-print relative z-10">
-        <div className="sticky top-4 h-[calc(100dvh-2rem)] glass-panel-strong rounded-2xl p-4 flex flex-col justify-between overflow-y-auto">
+      {/* Desktop Sidebar (Laptop & Large Desktop >= 1024px) — Deep Navy Glass */}
+      <aside className="hidden lg:flex lg:flex-col w-64 shrink-0 glass-sidebar text-slate-200 no-print relative z-20">
+        <div className="sticky top-0 h-[100dvh] p-4 flex flex-col justify-between overflow-y-auto">
           <div className="space-y-6">
-            {/* Brand */}
-            <div className="px-0.5 pt-1 flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden">
+            {/* Brand Emblem & System Title */}
+            <div className="px-1 pt-1 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/95 p-1.5 flex items-center justify-center shadow-lg shadow-blue-950/40 ring-1 ring-white/40 shrink-0 overflow-hidden">
                 <img
                   src={COMPANY_LOGO_SRC}
                   alt="THAI VIET CORPORATION"
@@ -672,31 +807,31 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               </div>
               <div className="min-w-0 flex-1">
                 <div
-                  className="text-[10.5px] font-extrabold tracking-[-0.02em] text-slate-900 leading-tight whitespace-nowrap"
+                  className="text-[11px] font-extrabold tracking-tight text-white leading-tight whitespace-nowrap"
                   title="THAI VIET CORPORATION"
                 >
                   THAI VIET CORPORATION
                 </div>
-                <div className="text-[11px] font-medium text-slate-500 truncate mt-0.5">
-                  Báo cáo bảo dưỡng đội xe
+                <div className="text-[11px] font-medium text-blue-200/75 truncate mt-0.5">
+                  Quản Lý Bảo Dưỡng Đội Xe
                 </div>
               </div>
             </div>
 
-            {/* Authenticated User Profile & Role Badge at top of Sidebar */}
-            <div className="px-3 py-2.5 rounded-xl glass-tile border border-white/80 flex items-center gap-2.5">
+            {/* Authenticated User Profile Card */}
+            <div className="px-3 py-2.5 rounded-xl bg-white/8 border border-white/14 backdrop-blur-md shadow-inner flex items-center gap-2.5">
               <div
                 className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
                   isAdmin
-                    ? 'bg-blue-600/15 text-blue-700'
-                    : 'bg-emerald-600/15 text-emerald-700'
+                    ? 'bg-blue-500/25 text-blue-200 ring-1 ring-blue-400/30'
+                    : 'bg-emerald-500/25 text-emerald-200 ring-1 ring-emerald-400/30'
                 }`}
               >
                 {isAdmin ? <Shield className="w-4 h-4" /> : <User className="w-4 h-4" />}
               </div>
               <div className="min-w-0 flex-1">
                 <div
-                  className="text-[11.5px] font-bold text-slate-900 leading-snug break-words"
+                  className="text-[11.5px] font-bold text-white leading-snug break-words"
                   title={displayName}
                 >
                   {displayName}
@@ -705,14 +840,14 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                   <span
                     className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold leading-none whitespace-nowrap ${
                       isAdmin
-                        ? 'bg-blue-100/90 text-blue-800 border border-blue-200'
-                        : 'bg-slate-200/80 text-slate-700 border border-slate-300/70'
+                        ? 'bg-blue-500/25 text-blue-200 border border-blue-400/35'
+                        : 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/35'
                     }`}
                   >
                     {isAdmin ? 'Admin' : 'Người dùng'}
                   </span>
                   {profile?.vehicle_plate && (
-                    <span className="font-mono text-[10px] font-semibold text-slate-500 truncate">
+                    <span className="font-mono text-[10px] font-semibold text-slate-300 truncate">
                       {profile.vehicle_plate}
                     </span>
                   )}
@@ -720,125 +855,69 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               </div>
             </div>
 
-            {/* Navigation with Admin Report Tab Hide/Show Eye Icon */}
-            <nav aria-label="Điều hướng chính" className="space-y-1">
+            {/* Clean Enterprise Navigation — 3D Liquid Glass Tabs */}
+            <nav aria-label="Điều hướng chính" className="space-y-2">
               {visibleNavItems.map((item) => {
                 const Icon = item.icon;
                 const active = activePage === item.id;
                 const isTabHidden = store.hiddenReportTabs.includes(item.id);
-                const canHideTab = effectiveAdminMode && item.id !== 'dashboard';
 
                 return (
-                  <div key={item.id} className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => navigateToPage(item.id)}
-                      className={`flex-1 min-w-0 min-h-[40px] flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
-                        active
-                          ? 'glass-button-primary text-white'
-                          : isTabHidden
-                          ? 'text-slate-400 line-through bg-white/25 hover:bg-white/45'
-                          : 'text-slate-700 hover:text-slate-950 hover:bg-white/55'
-                      }`}
-                    >
-                      <span className="flex items-center gap-2.5 min-w-0 truncate">
-                        <Icon className="w-4 h-4 shrink-0" />
-                        <span className="truncate">{item.label}</span>
-                      </span>
-                      {isAdmin && item.id === 'vehicles' && urgentVehicleAlertCount > 0 && (
-                        <span
-                          className={`font-mono text-[11px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
-                            active ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'
-                          }`}
-                        >
-                          {urgentVehicleAlertCount}
-                        </span>
-                      )}
-                      {item.id === 'po' && currentMetrics.missingPoItemCount > 0 && (
-                        <span
-                          className={`font-mono text-[11px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
-                            active ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {currentMetrics.missingPoItemCount}
-                        </span>
-                      )}
-                    </button>
-
-                    {canHideTab && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          store.toggleReportTabVisibility(item.id);
-                          showToast(
-                            isTabHidden
-                              ? `Đã hiện lại tab "${item.label}" cho người xem.`
-                              : `Đã ẩn tab "${item.label}" (chỉ hiện ở chế độ Admin).`
-                          );
-                        }}
-                        title={
-                          isTabHidden
-                            ? `Quyền Admin: Hiện lại tab ${item.label}`
-                            : `Quyền Admin: Ẩn tab ${item.label}`
-                        }
-                        className={`p-2 rounded-xl border transition-colors shrink-0 ${
-                          isTabHidden
-                            ? 'bg-amber-50/90 border-amber-200 text-amber-700 hover:bg-amber-100'
-                            : 'bg-white/40 border-white/75 text-slate-400 hover:text-slate-800 hover:bg-white/80'
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => navigateToPage(item.id)}
+                    className={`w-full min-w-0 min-h-[42px] flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${
+                      active
+                        ? 'nav-tab-3d-active'
+                        : isTabHidden
+                        ? 'nav-tab-3d text-slate-500 line-through'
+                        : 'nav-tab-3d text-slate-200 hover:text-white'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2.5 min-w-0 truncate">
+                      <Icon className="w-4 h-4 shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </span>
+                    {isAdmin && item.id === 'vehicles' && urgentVehicleAlertCount > 0 && (
+                      <span
+                        className={`font-mono text-[11px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
+                          active
+                            ? 'bg-white/25 text-white border border-white/30'
+                            : 'bg-red-500/25 text-red-200 border border-red-400/35'
                         }`}
                       >
-                        {isTabHidden ? (
-                          <EyeOff className="w-3.5 h-3.5" />
-                        ) : (
-                          <Eye className="w-3.5 h-3.5" />
-                        )}
-                      </button>
+                        {urgentVehicleAlertCount}
+                      </span>
                     )}
-                  </div>
+                    {item.id === 'po' && currentMetrics.missingPoItemCount > 0 && (
+                      <span
+                        className={`font-mono text-[11px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
+                          active
+                            ? 'bg-white/25 text-white border border-white/30'
+                            : 'bg-amber-500/25 text-amber-200 border border-amber-400/35'
+                        }`}
+                      >
+                        {currentMetrics.missingPoItemCount}
+                      </span>
+                    )}
+                  </button>
                 );
               })}
             </nav>
           </div>
 
-          {/* Bottom quick tools + Admin Role Toggle + Logout */}
-          <div className="space-y-2 pt-4 border-t border-slate-200/70">
+          {/* Bottom Clean Actions */}
+          <div className="space-y-2 pt-4 border-t border-white/12">
             {isAdmin && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    store.toggleAdminMode();
-                    showToast(
-                      store.isAdminMode
-                        ? 'Đã chuyển sang Chế độ Xem (áp dụng ẩn các tab/báo cáo).'
-                        : 'Đã bật Quyền Admin (hiện ký hiệu ẩn/hiện tab báo cáo).'
-                    );
-                  }}
-                  className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                    store.isAdminMode
-                      ? 'bg-blue-50/85 border-blue-200 text-blue-800'
-                      : 'glass-tile text-slate-700 hover:bg-white/80'
-                  }`}
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <Shield className="w-3.5 h-3.5 shrink-0" />
-                    {store.isAdminMode ? 'Quyền Admin: Bật' : 'Chế độ Xem'}
-                  </span>
-                  <span className="text-[10px] font-bold uppercase tracking-wider opacity-80">
-                    {store.isAdminMode ? 'Ẩn/Hiện' : 'Thành viên'}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setImportModalOpen(true)}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl glass-tile hover:bg-white/80 text-xs font-semibold text-slate-800 hover:text-blue-700 transition-all"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  Nhập Excel / CSV (UPSERT)
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={() => setImportModalOpen(true)}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-white/10 hover:bg-white/16 border border-white/16 text-xs font-semibold text-white transition-all"
+              >
+                <Upload className="w-3.5 h-3.5 text-blue-300 shrink-0" />
+                Nhập Excel / CSV (UPSERT)
+              </button>
             )}
 
             <button
@@ -846,21 +925,21 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               onClick={() => {
                 onLogout();
               }}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl glass-tile hover:bg-red-50/85 border border-white/80 hover:border-red-200 text-xs font-semibold text-slate-700 hover:text-red-700 transition-all"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-white/6 hover:bg-red-500/20 border border-white/12 hover:border-red-400/40 text-xs font-semibold text-slate-300 hover:text-red-200 transition-all"
             >
               <LogOut className="w-3.5 h-3.5 shrink-0" />
               Đăng xuất
             </button>
 
-            <div className="px-2 text-[11px] text-slate-500 flex items-center justify-between">
+            <div className="px-2 pt-1 text-[11px] text-slate-400 flex items-center justify-between">
               <span>Đội xe quản lý</span>
-              <strong className="font-mono text-slate-800">{store.vehicles.length} xe</strong>
+              <strong className="font-mono text-slate-200">{activeDataset.vehicles.length} xe</strong>
             </div>
           </div>
         </div>
       </aside>
 
-      {/* iPad / Tablet Expandable Full Sidebar Overlay (640px - 1023px) */}
+      {/* iPad / Mobile Slide-over Navigation Drawer — Deep Navy Glass */}
       <AnimatePresence>
         {tabletDrawerOpen && (
           <motion.div
@@ -868,21 +947,21 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.16 }}
-            className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs lg:hidden no-print"
+            className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs lg:hidden no-print"
             onClick={() => setTabletDrawerOpen(false)}
           >
             <motion.div
               initial={{ x: -296 }}
               animate={{ x: 0 }}
               exit={{ x: -296 }}
-              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
               onClick={(e) => e.stopPropagation()}
-              className="w-72 max-w-[85vw] h-[100dvh] glass-panel-strong p-4 flex flex-col justify-between overflow-y-auto safe-top safe-bottom"
+              className="w-72 max-w-[85vw] h-[100dvh] glass-sidebar text-slate-200 p-4 flex flex-col justify-between overflow-y-auto safe-top safe-bottom"
             >
               <div className="space-y-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-10 h-10 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden">
+                    <div className="w-10 h-10 rounded-xl bg-white/95 p-1.5 flex items-center justify-center shadow-md shrink-0 overflow-hidden">
                       <img
                         src={COMPANY_LOGO_SRC}
                         alt="THAI VIET CORPORATION"
@@ -890,11 +969,11 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                       />
                     </div>
                     <div className="min-w-0">
-                      <div className="font-extrabold text-[11px] tracking-[-0.02em] text-slate-900 leading-tight whitespace-nowrap">
+                      <div className="font-extrabold text-[11px] tracking-tight text-white leading-tight whitespace-nowrap">
                         THAI VIET CORPORATION
                       </div>
-                      <div className="text-[10.5px] font-medium text-slate-500">
-                        Báo cáo bảo dưỡng đội xe
+                      <div className="text-[10.5px] font-medium text-blue-200/75">
+                        Quản Lý Bảo Dưỡng Đội Xe
                       </div>
                     </div>
                   </div>
@@ -902,39 +981,39 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     type="button"
                     onClick={() => setTabletDrawerOpen(false)}
                     aria-label="Đóng thanh điều hướng"
-                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 shrink-0"
+                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-xl text-slate-300 hover:text-white hover:bg-white/10 shrink-0"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
                 {/* User Badge */}
-                <div className="px-3 py-2.5 rounded-xl glass-tile border border-white/80 flex items-center gap-2.5">
+                <div className="px-3 py-2.5 rounded-xl bg-white/8 border border-white/14 flex items-center gap-2.5">
                   <div
                     className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
                       isAdmin
-                        ? 'bg-blue-600/15 text-blue-700'
-                        : 'bg-emerald-600/15 text-emerald-700'
+                        ? 'bg-blue-500/25 text-blue-200'
+                        : 'bg-emerald-500/25 text-emerald-200'
                     }`}
                   >
                     {isAdmin ? <Shield className="w-4 h-4" /> : <User className="w-4 h-4" />}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-xs font-bold text-slate-900 leading-snug break-words">
+                    <div className="text-xs font-bold text-white leading-snug break-words">
                       {displayName}
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5 mt-1">
                       <span
                         className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold leading-none ${
                           isAdmin
-                            ? 'bg-blue-100/90 text-blue-800 border border-blue-200'
-                            : 'bg-slate-200/80 text-slate-700 border border-slate-300/70'
+                            ? 'bg-blue-500/25 text-blue-200 border border-blue-400/35'
+                            : 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/35'
                         }`}
                       >
                         {isAdmin ? 'Admin' : 'Người dùng'}
                       </span>
                       {profile?.vehicle_plate && (
-                        <span className="font-mono text-[10px] font-semibold text-slate-600">
+                        <span className="font-mono text-[10px] font-semibold text-slate-300">
                           {profile.vehicle_plate}
                         </span>
                       )}
@@ -942,107 +1021,69 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                   </div>
                 </div>
 
-                <nav className="space-y-1.5">
+                <nav className="space-y-2">
                   {visibleNavItems.map((item) => {
                     const Icon = item.icon;
                     const active = activePage === item.id;
                     const isTabHidden = store.hiddenReportTabs.includes(item.id);
                     return (
-                      <div key={item.id} className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => navigateToPage(item.id)}
-                          className={`flex-1 min-h-[44px] flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors touch-press ${
-                            active
-                              ? 'glass-button-primary text-white'
-                              : isTabHidden
-                              ? 'text-slate-400 line-through bg-white/30'
-                              : 'text-slate-700 hover:bg-white/80'
-                          }`}
-                        >
-                          <span className="flex items-center gap-2.5">
-                            <Icon className="w-4.5 h-4.5 shrink-0" />
-                            <span>{item.label}</span>
-                          </span>
-                          {isAdmin && item.id === 'vehicles' && urgentVehicleAlertCount > 0 && (
-                            <span
-                              className={`font-mono text-[11px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
-                                active ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'
-                              }`}
-                            >
-                              {urgentVehicleAlertCount}
-                            </span>
-                          )}
-                          {item.id === 'po' && currentMetrics.missingPoItemCount > 0 && (
-                            <span
-                              className={`font-mono text-[11px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
-                                active ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800'
-                              }`}
-                            >
-                              {currentMetrics.missingPoItemCount}
-                            </span>
-                          )}
-                        </button>
-                        {effectiveAdminMode && item.id !== 'dashboard' && (
-                          <button
-                            type="button"
-                            onClick={() => store.toggleReportTabVisibility(item.id)}
-                            className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-500"
-                            title="Ẩn/hiện tab"
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => navigateToPage(item.id)}
+                        className={`w-full min-h-[44px] flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-xl text-sm font-bold ${
+                          active
+                            ? 'nav-tab-3d-active'
+                            : isTabHidden
+                            ? 'nav-tab-3d text-slate-500 line-through'
+                            : 'nav-tab-3d text-slate-200 hover:text-white'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2.5">
+                          <Icon className="w-4.5 h-4.5 shrink-0" />
+                          <span>{item.label}</span>
+                        </span>
+                        {isAdmin && item.id === 'vehicles' && urgentVehicleAlertCount > 0 && (
+                          <span
+                            className={`font-mono text-[11px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
+                              active
+                                ? 'bg-white/25 text-white border border-white/30'
+                                : 'bg-red-500/25 text-red-200'
+                            }`}
                           >
-                            {isTabHidden ? (
-                              <EyeOff className="w-4 h-4 text-amber-700" />
-                            ) : (
-                              <Eye className="w-4 h-4" />
-                            )}
-                          </button>
+                            {urgentVehicleAlertCount}
+                          </span>
                         )}
-                      </div>
+                        {item.id === 'po' && currentMetrics.missingPoItemCount > 0 && (
+                          <span
+                            className={`font-mono text-[11px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
+                              active
+                                ? 'bg-white/25 text-white border border-white/30'
+                                : 'bg-amber-500/25 text-amber-200'
+                            }`}
+                          >
+                            {currentMetrics.missingPoItemCount}
+                          </span>
+                        )}
+                      </button>
                     );
                   })}
                 </nav>
               </div>
 
-              <div className="space-y-2 pt-4 border-t border-slate-200/70">
+              <div className="space-y-2 pt-4 border-t border-white/12">
                 {isAdmin && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        store.toggleAdminMode();
-                        showToast(
-                          store.isAdminMode
-                            ? 'Đã chuyển sang Chế độ Xem (áp dụng ẩn các tab/báo cáo).'
-                            : 'Đã bật Quyền Admin (hiện ký hiệu ẩn/hiện tab báo cáo).'
-                        );
-                      }}
-                      className={`w-full min-h-[44px] flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                        store.isAdminMode
-                          ? 'bg-blue-50/85 border-blue-200 text-blue-800'
-                          : 'glass-tile text-slate-700'
-                      }`}
-                    >
-                      <span className="inline-flex items-center gap-1.5">
-                        <Shield className="w-4 h-4 shrink-0" />
-                        {store.isAdminMode ? 'Quyền Admin: Bật' : 'Chế độ Xem'}
-                      </span>
-                      <span className="text-[10px] font-bold uppercase tracking-wider opacity-80">
-                        {store.isAdminMode ? 'Ẩn/Hiện' : 'Thành viên'}
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTabletDrawerOpen(false);
-                        setImportModalOpen(true);
-                      }}
-                      className="w-full min-h-[44px] flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-blue-50 text-blue-700 text-xs font-semibold"
-                    >
-                      <FileSpreadsheet className="w-4 h-4" />
-                      Nhập Excel / CSV (UPSERT)
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTabletDrawerOpen(false);
+                      setImportModalOpen(true);
+                    }}
+                    className="w-full min-h-[44px] flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-white/10 hover:bg-white/16 border border-white/16 text-white text-xs font-semibold"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-blue-300" />
+                    Nhập Excel / CSV (UPSERT)
+                  </button>
                 )}
                 <button
                   type="button"
@@ -1050,7 +1091,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     setTabletDrawerOpen(false);
                     onLogout();
                   }}
-                  className="w-full min-h-[44px] flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-red-50/90 hover:bg-red-100 text-red-700 text-xs font-semibold border border-red-200/80"
+                  className="w-full min-h-[44px] flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-red-500/18 hover:bg-red-500/28 text-red-200 text-xs font-semibold border border-red-400/35"
                 >
                   <LogOut className="w-4 h-4" />
                   Đăng xuất
@@ -1063,20 +1104,20 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
 
       {/* Main Content Area */}
       <div className="flex-1 min-w-0 w-full flex flex-col relative z-10">
-        {/* Top Bar: Mobile (<768px) = 1 clean compact row + 1 unified search bar; Tablet/Desktop (>=768px) = single row */}
-        <header className="px-3 sm:px-5 md:px-6 pt-3 md:pt-4 pb-2 space-y-2.5 md:space-y-0 no-print safe-top w-full min-w-0">
-          {/* Mobile Compact Top Row (< 768px): [Hamburger + Logo] [Truncated Title] [+ Icon CTA + Profile] */}
+        {/* Top Bar: Sticky Frosted Glass Header */}
+        <header className="sticky top-0 z-30 glass-panel-strong border-x-0! border-t-0! border-b border-white/80! px-3 sm:px-5 md:px-6 pt-3 md:py-3.5 pb-2.5 space-y-2.5 md:space-y-0 no-print safe-top w-full min-w-0">
+          {/* Mobile Compact Top Row (< 768px) */}
           <div className="flex md:hidden items-center justify-between gap-2 relative min-w-0">
             <div className="flex items-center gap-2 min-w-0 flex-1">
               <button
                 type="button"
                 onClick={() => setTabletDrawerOpen(true)}
                 aria-label="Mở menu điều hướng"
-                className="min-w-[44px] min-h-[44px] rounded-xl glass-panel inline-flex items-center justify-center text-slate-700 shrink-0 touch-press"
+                className="min-w-[44px] min-h-[44px] rounded-xl glass-tile inline-flex items-center justify-center text-slate-700 shrink-0 touch-press"
               >
                 <Menu className="w-5 h-5" />
               </button>
-              <div className="w-9 h-9 rounded-xl bg-white/95 border border-white/90 p-1 flex items-center justify-center shadow-xs shrink-0 overflow-hidden">
+              <div className="w-9 h-9 rounded-xl bg-white/90 border border-white p-1 flex items-center justify-center shadow-xs shrink-0 overflow-hidden">
                 <img
                   src={COMPANY_LOGO_SRC}
                   alt="THAI VIET CORPORATION"
@@ -1098,6 +1139,23 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
+              {isAdmin && activePage === 'dashboard' && (
+                <DisplayCustomizePopover
+                  isAdminMode={store.isAdminMode}
+                  hiddenDashboardBlocks={store.hiddenDashboardBlocks}
+                  hiddenReportTabs={store.hiddenReportTabs}
+                  blockLabels={dashboardBlockLabels}
+                  navTabs={NAV_ITEMS}
+                  onToggleAdminMode={store.toggleAdminMode}
+                  onToggleBlockVisibility={store.toggleDashboardBlockVisibility}
+                  onToggleTabVisibility={store.toggleReportTabVisibility}
+                  onResetAll={() => {
+                    store.resetReportVisibility();
+                    showToast('Đã khôi phục hiển thị mặc định toàn bộ báo cáo.');
+                  }}
+                />
+              )}
+
               {!isAdmin && (
                 <button
                   type="button"
@@ -1115,7 +1173,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 type="button"
                 onClick={() => setMobileUserMenuOpen((prev) => !prev)}
                 aria-label="Tài khoản và đăng xuất"
-                className={`min-w-[44px] min-h-[44px] rounded-xl glass-panel flex items-center justify-center touch-press ${
+                className={`min-w-[44px] min-h-[44px] rounded-xl glass-tile flex items-center justify-center touch-press ${
                   isAdmin ? 'text-blue-700' : 'text-emerald-700'
                 }`}
               >
@@ -1135,15 +1193,15 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     initial={{ opacity: 0, y: -6, scale: 0.96 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -6, scale: 0.96 }}
-                    transition={{ duration: 0.14 }}
-                    className="absolute right-0 top-[calc(100%+8px)] z-50 w-72 max-w-[calc(100vw-1.5rem)] max-h-[80dvh] overflow-y-auto glass-panel-strong rounded-2xl p-3.5 shadow-xl border border-white/90 space-y-2.5"
+                    transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                    className="absolute right-0 top-[calc(100%+8px)] z-50 w-72 max-w-[calc(100vw-1.5rem)] max-h-[80dvh] overflow-y-auto glass-panel-strong rounded-2xl p-3.5 space-y-2.5"
                   >
-                    <div className="flex items-start gap-2.5 pb-2.5 border-b border-slate-200/70">
+                    <div className="flex items-start gap-2.5 pb-2.5 border-b border-slate-100">
                       <div
                         className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
                           isAdmin
-                            ? 'bg-blue-600/15 text-blue-700'
-                            : 'bg-emerald-600/15 text-emerald-700'
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'bg-emerald-50 text-emerald-700'
                         }`}
                       >
                         {isAdmin ? <Shield className="w-4.5 h-4.5" /> : <User className="w-4.5 h-4.5" />}
@@ -1157,7 +1215,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                             className={`px-1.5 py-0.5 rounded-md text-[11px] font-bold ${
                               isAdmin
                                 ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                                : 'bg-slate-200/80 text-slate-700 border border-slate-300/70'
+                                : 'bg-slate-100 text-slate-700 border border-slate-200'
                             }`}
                           >
                             {isAdmin ? 'Admin' : 'Người dùng'}
@@ -1172,41 +1230,17 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     </div>
 
                     {isAdmin && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            store.toggleAdminMode();
-                            setMobileUserMenuOpen(false);
-                            showToast(
-                              store.isAdminMode
-                                ? 'Đã chuyển sang Chế độ Xem (áp dụng ẩn các tab/báo cáo).'
-                                : 'Đã bật Quyền Admin (hiện ký hiệu ẩn/hiện tab báo cáo).'
-                            );
-                          }}
-                          className="w-full min-h-[44px] flex items-center justify-between gap-2 px-3 rounded-xl glass-tile text-xs font-semibold text-slate-800"
-                        >
-                          <span className="inline-flex items-center gap-2">
-                            <Shield className="w-4 h-4 text-blue-600" />
-                            {store.isAdminMode ? 'Quyền Admin: Bật' : 'Chế độ Xem'}
-                          </span>
-                          <span className="text-[10px] font-bold text-blue-700 uppercase">
-                            {store.isAdminMode ? 'Ẩn/Hiện' : 'Xem'}
-                          </span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMobileUserMenuOpen(false);
-                            setImportModalOpen(true);
-                          }}
-                          className="w-full min-h-[44px] flex items-center gap-2 px-3 rounded-xl glass-tile text-xs font-semibold text-blue-700"
-                        >
-                          <Upload className="w-4 h-4" />
-                          Nhập Excel / CSV (UPSERT)
-                        </button>
-                      </>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileUserMenuOpen(false);
+                          setImportModalOpen(true);
+                        }}
+                        className="w-full min-h-[44px] flex items-center gap-2 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-blue-700"
+                      >
+                        <Upload className="w-4 h-4" />
+                        Nhập Excel / CSV (UPSERT)
+                      </button>
                     )}
 
                     <button
@@ -1215,7 +1249,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                         setMobileUserMenuOpen(false);
                         onLogout();
                       }}
-                      className="w-full min-h-[44px] flex items-center justify-center gap-2 px-3 rounded-xl bg-red-50 text-red-700 border border-red-200/80 text-xs font-bold"
+                      className="w-full min-h-[44px] flex items-center justify-center gap-2 px-3 rounded-xl bg-red-50 text-red-700 border border-red-200 text-xs font-bold"
                     >
                       <LogOut className="w-4 h-4" />
                       Đăng xuất
@@ -1253,7 +1287,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 onClick={() => setSearchModalOpen(true)}
                 aria-label="Mở tìm kiếm nâng cao"
                 title="Mở tra cứu nhanh xe & PO"
-                className="min-h-[34px] px-2.5 rounded-lg bg-blue-50/90 text-blue-700 text-[11px] font-bold whitespace-nowrap"
+                className="min-h-[34px] px-2.5 rounded-lg bg-blue-50 text-blue-700 text-[11px] font-bold whitespace-nowrap"
               >
                 Tra cứu
               </button>
@@ -1261,17 +1295,17 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
           </div>
 
           {/* Tablet & Desktop Top Bar (>= 768px) */}
-          <div className="hidden md:flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5 min-w-0">
+          <div className="hidden md:flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5 max-w-[1520px] mx-auto w-full min-w-0">
             <div className="flex items-center gap-2.5 min-w-[200px] flex-1">
               <button
                 type="button"
                 onClick={() => setTabletDrawerOpen(true)}
-                className="lg:hidden min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-xl glass-panel text-slate-700 touch-press shrink-0"
+                className="lg:hidden min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-700 touch-press shrink-0"
                 aria-label="Mở rộng menu"
               >
                 <Menu className="w-5 h-5" />
               </button>
-              <h1 className="fluid-page-title font-extrabold tracking-tight text-slate-900 break-words leading-snug min-w-0">
+              <h1 className="fluid-page-title font-extrabold tracking-tight text-slate-950 break-words leading-snug min-w-0">
                 {activePage === 'dashboard' && 'BÁO CÁO BẢO DƯỠNG ĐỘI XE'}
                 {activePage === 'orders' && 'Danh sách phiếu bảo dưỡng'}
                 {activePage === 'vehicles' &&
@@ -1291,7 +1325,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                   onChange={(e) => updateFilters({ searchQuery: e.target.value })}
                   placeholder="Tìm nhanh biển số, PO, hạng mục..."
                   aria-label="Tìm nhanh biển số, PO, hạng mục"
-                  className="glass-input w-full min-h-[42px] pl-9 pr-16 rounded-xl text-xs text-slate-900 placeholder:text-slate-500"
+                  className="glass-input w-full min-h-[40px] pl-9 pr-16 rounded-xl text-xs text-slate-900 placeholder:text-slate-500"
                 />
                 <div className="absolute right-1.5 flex items-center gap-1">
                   {filters.searchQuery && (
@@ -1308,18 +1342,35 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     type="button"
                     onClick={() => setSearchModalOpen(true)}
                     title="Mở tra cứu nhanh (Ctrl+K)"
-                    className="font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-200/80 hover:bg-blue-100 text-slate-600 hover:text-blue-800 shrink-0 transition-colors"
+                    className="font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 hover:bg-blue-50 text-slate-600 hover:text-blue-700 shrink-0 transition-colors"
                   >
                     Ctrl K
                   </button>
                 </div>
               </div>
 
+              {isAdmin && activePage === 'dashboard' && (
+                <DisplayCustomizePopover
+                  isAdminMode={store.isAdminMode}
+                  hiddenDashboardBlocks={store.hiddenDashboardBlocks}
+                  hiddenReportTabs={store.hiddenReportTabs}
+                  blockLabels={dashboardBlockLabels}
+                  navTabs={NAV_ITEMS}
+                  onToggleAdminMode={store.toggleAdminMode}
+                  onToggleBlockVisibility={store.toggleDashboardBlockVisibility}
+                  onToggleTabVisibility={store.toggleReportTabVisibility}
+                  onResetAll={() => {
+                    store.resetReportVisibility();
+                    showToast('Đã khôi phục hiển thị mặc định toàn bộ báo cáo.');
+                  }}
+                />
+              )}
+
               {!isAdmin && (
                 <button
                   type="button"
                   onClick={() => openNewOrder()}
-                  className="inline-flex items-center gap-1.5 min-h-[42px] px-4 rounded-xl glass-button-primary text-white text-xs font-bold transition-all whitespace-nowrap shrink-0 touch-press"
+                  className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl glass-button-primary text-white text-xs font-bold transition-all whitespace-nowrap shrink-0 touch-press"
                 >
                   <Plus className="w-4 h-4 shrink-0" />
                   Thêm phiếu
@@ -1342,21 +1393,55 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         </div>
 
         {/* Main Viewport — reserves clearance for mobile fixed bottom nav bar + safe-area */}
-        <main className="flex-1 px-3 sm:px-5 md:px-6 pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))] md:pb-10 pt-2 space-y-4 w-full min-w-0">
+        <main className="flex-1 px-3 sm:px-5 md:px-6 pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))] md:pb-10 pt-4 space-y-4 w-full max-w-[1560px] mx-auto min-w-0">
+          {/* Demo Mode Active Banner */}
+          {demoMode && (
+            <div className="glass-panel rounded-2xl border-indigo-300/80! bg-linear-to-r! from-indigo-50/85! via-white/75! to-blue-50/75! px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 no-print">
+              <div className="flex items-center gap-2 text-xs font-semibold text-indigo-950">
+                <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span>
+                  Đang bật <strong>Chế độ dữ liệu mẫu</strong> — Dữ liệu minh họa chỉ hiển thị tạm thời trên trình duyệt, không ghi vào Supabase.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDemoMode(false);
+                  showToast('Đã tắt dữ liệu mẫu — hiển thị 100% dữ liệu thật từ Supabase.');
+                }}
+                className="px-3 py-1 rounded-lg glass-tile text-indigo-800 text-xs font-bold whitespace-nowrap"
+              >
+                Tắt dữ liệu mẫu
+              </button>
+            </div>
+          )}
+
           {/* Global Filter Bar on analytical & ledger pages */}
           {(activePage === 'dashboard' || activePage === 'orders' || activePage === 'po') && (
             <GlobalFilterBar
               filters={filters}
               onChange={updateFilters}
               onResetAll={resetAllFilters}
-              vehicles={store.vehicles}
-              orders={store.orders}
-              items={store.items}
+              vehicles={activeDataset.vehicles}
+              orders={activeDataset.orders}
+              items={activeDataset.items}
               lastUpdated={store.lastUpdated}
               isSyncing={store.isSyncing}
               onRefresh={store.refreshData}
               onExportExcel={handleExportExcel}
               onExportPdf={handleExportPdf}
+              demoMode={demoMode}
+              onToggleDemoMode={() => {
+                setDemoMode((prev) => {
+                  const next = !prev;
+                  showToast(
+                    next
+                      ? 'Đã bật Chế độ dữ liệu mẫu (không ghi vào Supabase).'
+                      : 'Đã khôi phục dữ liệu thật từ Supabase.'
+                  );
+                  return next;
+                });
+              }}
             />
           )}
 
@@ -1364,282 +1449,105 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
           <AnimatePresence mode="wait">
             <motion.div
               key={`${activePage}_${selectedVehicleId ?? 'list'}`}
-              initial={{ opacity: 0, y: 6 }}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
               className="space-y-4 min-w-0"
             >
               {isAdmin && activePage === 'dashboard' && (
                 <>
-                  {/* Admin Visibility Control Bar: Collapsible Accordion on Mobile (<768px), inline wrap on Desktop (>=768px) */}
-                  {effectiveAdminMode && (
-                    <section
-                      aria-label="Quyền Admin ẩn hiện các mục báo cáo"
-                      className="glass-tile rounded-2xl px-3.5 sm:px-4 py-2.5 no-print w-full min-w-0"
-                    >
-                      {/* Mobile Accordion Header (< 768px) */}
-                      <button
-                        type="button"
-                        onClick={() => setMobileAdminControlsOpen((o) => !o)}
-                        className="md:hidden w-full min-h-[40px] flex items-center justify-between gap-2 text-left"
-                        aria-expanded={mobileAdminControlsOpen}
-                      >
-                        <span className="inline-flex items-center gap-2 text-xs font-bold text-blue-900 min-w-0">
-                          <Shield className="w-4 h-4 text-blue-600 shrink-0" />
-                          <span className="truncate">Admin — Ẩn/Hiện tab báo cáo</span>
-                          {store.hiddenDashboardBlocks.length > 0 && (
-                            <span className="px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold shrink-0">
-                              {store.hiddenDashboardBlocks.length} ẩn
-                            </span>
-                          )}
-                        </span>
-                        <ChevronDown
-                          className={`w-4 h-4 text-slate-600 shrink-0 transition-transform duration-200 ${
-                            mobileAdminControlsOpen ? 'rotate-180' : ''
-                          }`}
-                        />
-                      </button>
-
-                      {/* Chips Body: Collapsed by default on mobile (<768px), always visible on >=768px */}
-                      <div
-                        className={`${
-                          mobileAdminControlsOpen ? 'flex mt-2.5 pt-2.5 border-t border-white/75' : 'hidden'
-                        } md:flex flex-wrap items-center justify-between gap-2.5 min-w-0`}
-                      >
-                        <div className="flex flex-wrap items-center gap-1.5 text-xs min-w-0 flex-1">
-                          <span className="hidden md:inline-flex items-center gap-1.5 font-bold text-blue-900 mr-1 whitespace-nowrap">
-                            <Shield className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                            Admin — Ẩn/Hiện tab báo cáo:
-                          </span>
-                          {store.dashboardBlockOrder.map((blk) => {
-                            const hidden = isBlockHidden(blk);
-                            return (
-                              <button
-                                key={blk}
-                                type="button"
-                                onClick={() => store.toggleDashboardBlockVisibility(blk)}
-                                className={`inline-flex items-center gap-1.5 min-h-[38px] md:min-h-[30px] px-2.5 py-1.5 rounded-xl text-xs md:text-[11px] font-semibold border transition-all text-left max-w-full whitespace-normal sm:whitespace-nowrap touch-press ${
-                                  hidden
-                                    ? 'bg-amber-50/90 border-amber-300 text-amber-900 line-through'
-                                    : 'bg-white/80 border-white/95 text-slate-700 hover:bg-white'
-                                }`}
-                                title={hidden ? 'Bấm để hiện lại mục báo cáo này' : 'Bấm để ẩn và sắp xếp vị trí mục báo cáo này'}
-                              >
-                                {hidden ? (
-                                  <EyeOff className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                                ) : (
-                                  <Eye className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                                )}
-                                <span className="break-words leading-snug">{dashboardBlockLabels[blk]}</span>
-                              </button>
-                            );
-                          })}
+                  {/* Smart Empty State Banner */}
+                  {isEmptyPeriod && (
+                    <div className="glass-panel rounded-2xl border-blue-300/75! px-4 sm:px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 no-print">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-linear-to-br from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-600/20 flex items-center justify-center shrink-0">
+                          <Calendar className="w-4.5 h-4.5" />
                         </div>
-
-                        {(store.hiddenDashboardBlocks.length > 0 ||
-                          store.hiddenReportTabs.length > 0 ||
-                          hasCustomBlockOrder) && (
+                        <div className="text-xs sm:text-sm font-semibold text-slate-800 leading-snug break-words">
+                          <span className="font-extrabold text-slate-950">{currentRange.label}</span> chưa phát sinh chi phí bảo dưỡng.
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {filters.periodPreset !== 'quarter' && (
                           <button
                             type="button"
-                            onClick={() => {
-                              store.resetReportVisibility();
-                              showToast('Đã khôi phục hiển thị và thứ tự mặc định toàn bộ báo cáo.');
-                            }}
-                            className="min-h-[36px] md:min-h-0 px-2.5 py-1 rounded-lg text-xs md:text-[11px] font-bold text-blue-700 hover:underline whitespace-nowrap shrink-0"
+                            onClick={() => updateFilters({ periodPreset: 'quarter' })}
+                            className="px-3.5 py-2 rounded-xl glass-tile text-slate-800 text-xs font-semibold whitespace-nowrap touch-press"
                           >
-                            Hiện tất cả &amp; mặc định
+                            Xem dữ liệu Quý này
                           </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDemoMode(true);
+                            showToast('Đã bật Chế độ dữ liệu mẫu để xem thử biểu đồ & KPI.');
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl glass-button-primary text-white text-xs font-semibold whitespace-nowrap touch-press"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          Bật dữ liệu mẫu
+                        </button>
                       </div>
-                    </section>
+                    </div>
                   )}
 
-                  {/* Dynamic Overview Blocks (ordered by store.dashboardBlockOrder) */}
-                  {store.dashboardBlockOrder.map((blockId, index) => {
-                    // Admin-only alerts center is completely hidden for standard users
-                    if (!isAdmin && blockId === 'alerts') {
-                      return null;
-                    }
+                  {isDashboardLoading ? (
+                    <DashboardSkeleton />
+                  ) : (
+                    /* Dynamic Overview Blocks (ordered by store.dashboardBlockOrder, cleanly hidden if toggled off) */
+                    store.dashboardBlockOrder.map((blockId) => {
+                      if (!isAdmin && blockId === 'alerts') return null;
+                      if (isBlockHidden(blockId)) return null;
 
-                    const hidden = isBlockHidden(blockId);
-                    const totalBlocks = store.dashboardBlockOrder.length;
-                    const isFirst = index === 0;
-                    const isLast = index === totalBlocks - 1;
-                    const isDropTarget =
-                      draggingBlockId !== null &&
-                      dragOverBlockId === blockId &&
-                      draggingBlockId !== blockId;
+                      let content: React.ReactNode = null;
 
-                    // In Member View mode (or standard user role), hidden blocks are completely hidden
-                    if (hidden && !effectiveAdminMode) {
-                      return null;
-                    }
-
-                    // In Admin Mode, hidden blocks collapse into a movable glass bar (Up/Down + Drag-and-Drop)
-                    if (hidden && effectiveAdminMode) {
-                      return (
-                        <motion.div
-                          key={blockId}
-                          layout="position"
-                          transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                          className="no-print"
-                        >
-                          <div
-                            draggable
-                            onDragStart={(e) => {
-                              e.dataTransfer.effectAllowed = 'move';
-                              setDraggingBlockId(blockId);
-                            }}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              if (draggingBlockId && draggingBlockId !== blockId) {
-                                setDragOverBlockId(blockId);
-                              }
-                            }}
-                            onDragLeave={() => {
-                              if (dragOverBlockId === blockId) setDragOverBlockId(null);
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              if (draggingBlockId && draggingBlockId !== blockId) {
-                                store.reorderDashboardBlocks(draggingBlockId, blockId);
-                              }
-                              setDraggingBlockId(null);
-                              setDragOverBlockId(null);
-                            }}
-                            onDragEnd={() => {
-                              setDraggingBlockId(null);
-                              setDragOverBlockId(null);
-                            }}
-                            className={`glass-tile rounded-2xl px-4 py-2.5 border border-dashed flex flex-wrap items-center justify-between gap-2.5 transition-all cursor-grab active:cursor-grabbing ${
-                              draggingBlockId === blockId
-                                ? 'opacity-55 border-blue-400 bg-blue-50/60'
-                                : isDropTarget
-                                ? 'border-blue-500 ring-2 ring-blue-400/75 bg-blue-50/75'
-                                : 'border-amber-300/90 bg-amber-50/55 hover:bg-amber-50/80'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <span
-                                className="p-1 rounded-lg bg-white/75 text-slate-400 hover:text-slate-700 shrink-0"
-                                title="Kéo thả để đổi vị trí lên trên hoặc xuống dưới"
-                              >
-                                <GripVertical className="w-4 h-4" />
-                              </span>
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100/90 border border-amber-200 text-amber-800 text-[11px] font-bold whitespace-nowrap shrink-0">
-                                <EyeOff className="w-3 h-3 shrink-0" />
-                                Đã ẩn
-                              </span>
-                              <span className="text-xs sm:text-sm font-bold text-slate-800 truncate">
-                                {dashboardBlockLabels[blockId]}
-                              </span>
-                              <span className="hidden sm:inline-flex font-mono text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-white/70 text-slate-500 tabular-nums shrink-0">
-                                Vị trí {index + 1}/{totalBlocks}
-                              </span>
-                            </div>
-
-                            <div className="flex flex-wrap items-center justify-end gap-1.5 w-full sm:w-auto shrink-0">
-                              <button
-                                type="button"
-                                disabled={isFirst}
-                                onClick={() => store.moveDashboardBlock(blockId, 'up')}
-                                title="Di chuyển ô này lên trên"
-                                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap ${
-                                  isFirst
-                                    ? 'bg-white/30 border-white/50 text-slate-300 cursor-not-allowed'
-                                    : 'bg-white/80 border-white/95 text-slate-700 hover:text-blue-700 hover:bg-white shadow-xs'
-                                }`}
-                              >
-                                <ArrowUp className="w-3.5 h-3.5 shrink-0" />
-                                <span>Lên trên</span>
-                              </button>
-                              <button
-                                type="button"
-                                disabled={isLast}
-                                onClick={() => store.moveDashboardBlock(blockId, 'down')}
-                                title="Di chuyển ô này xuống dưới"
-                                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap ${
-                                  isLast
-                                    ? 'bg-white/30 border-white/50 text-slate-300 cursor-not-allowed'
-                                    : 'bg-white/80 border-white/95 text-slate-700 hover:text-blue-700 hover:bg-white shadow-xs'
-                                }`}
-                              >
-                                <ArrowDown className="w-3.5 h-3.5 shrink-0" />
-                                <span>Xuống dưới</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => store.toggleDashboardBlockVisibility(blockId)}
-                                title="Hiện lại ô báo cáo tại vị trí này"
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-blue-600/90 hover:bg-blue-700 text-white text-xs font-semibold transition-colors whitespace-nowrap"
-                              >
-                                <Eye className="w-3.5 h-3.5 shrink-0" />
-                                <span>Hiện lại</span>
-                              </button>
-                            </div>
-                          </div>
-                        </motion.div>
-                      );
-                    }
-
-                    // Visible block wrapped as drop target for dragged hidden blocks
-                    let content: React.ReactNode = null;
-
-                    if (blockId === 'monthly_status') {
-                      content = (
-                        <ComparisonOverview
-                          title={monthlyStatusTitle}
-                          periodLabel={formatMonthLabel(currentYearMonth)}
-                          prevLabel={formatMonthLabel(prevCalendarMonth)}
-                          vehicleStatuses={vehicleStatuses}
-                          onOpenVehicle={openVehicleProfile}
-                          canCreateOrder={!isAdmin}
-                          onOpenNewOrderForVehicle={
-                            !isAdmin ? (vid) => openNewOrder(vid) : undefined
-                          }
-                          isAdminMode={effectiveAdminMode}
-                          onToggleBlock={store.toggleDashboardBlockVisibility}
-                        />
-                      );
-                    } else if (blockId === 'alerts') {
-                      content = (
-                        <PriorityAlertsPanel
-                          alerts={alerts}
-                          onOpenVehicle={openVehicleProfile}
-                          onApplyFilter={(patch) => updateFilters(patch)}
-                          onOpenNewOrderForVehicle={
-                            !isAdmin ? (vid) => openNewOrder(vid) : undefined
-                          }
-                          headerAction={
-                            effectiveAdminMode ? (
-                              <button
-                                type="button"
-                                onClick={() => store.toggleDashboardBlockVisibility('alerts')}
-                                title="Quyền Admin: Ẩn Góc Cảnh Báo Khẩn"
-                                className="min-w-[36px] min-h-[36px] inline-flex items-center justify-center rounded-xl glass-tile text-slate-500 hover:text-red-700 hover:bg-white/85 transition-colors no-print"
-                              >
-                                <EyeOff className="w-3.5 h-3.5" />
-                              </button>
-                            ) : undefined
-                          }
-                        />
-                      );
-                    } else if (blockId === 'charts') {
-                      content = (
-                        <div className="space-y-2">
-                          {effectiveAdminMode && (
-                            <div className="flex items-center justify-end no-print">
-                              <button
-                                type="button"
-                                onClick={() => store.toggleDashboardBlockVisibility('charts')}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg glass-tile text-[11px] font-semibold text-slate-600 hover:text-red-700"
-                              >
-                                <EyeOff className="w-3 h-3" />
-                                Ẩn khu vực biểu đồ
-                              </button>
-                            </div>
-                          )}
+                      if (blockId === 'kpi_summary') {
+                        content = (
+                          <KpiSummaryRow
+                            currentMetrics={currentMetrics}
+                            prevMetrics={prevMetrics}
+                            vehicles={activeDataset.vehicles}
+                            periodLabel={currentRange.label}
+                            prevLabel={prevRange.label}
+                            liveTodayISO={liveDateKey}
+                            isLoading={false}
+                            onFilterByMissingPo={() => updateFilters({ poNumber: '__MISSING__' })}
+                            onOpenVehiclesTab={() => navigateToPage('vehicles')}
+                          />
+                        );
+                      } else if (blockId === 'monthly_status') {
+                        content = (
+                          <ComparisonOverview
+                            title={monthlyStatusTitle}
+                            periodLabel={formatMonthLabel(currentYearMonth)}
+                            prevLabel={formatMonthLabel(prevCalendarMonth)}
+                            vehicleStatuses={vehicleStatuses}
+                            liveTodayISO={liveDateKey}
+                            activePlateKey={filters.plateKey}
+                            onOpenVehicle={openVehicleProfile}
+                            onOpenVehicleDrawer={(v) => setDrawerVehicleId(v.id)}
+                            onToggleCrossFilterPlate={handleToggleCrossFilterPlate}
+                            canCreateOrder={!isAdmin && !demoMode}
+                            onOpenNewOrderForVehicle={
+                              !isAdmin && !demoMode ? (vid) => openNewOrder(vid) : undefined
+                            }
+                          />
+                        );
+                      } else if (blockId === 'alerts') {
+                        content = (
+                          <PriorityAlertsPanel
+                            alerts={alerts}
+                            onOpenVehicle={openVehicleProfile}
+                            onApplyFilter={(patch) => updateFilters(patch)}
+                            onOpenNewOrderForVehicle={
+                              !isAdmin && !demoMode ? (vid) => openNewOrder(vid) : undefined
+                            }
+                          />
+                        );
+                      } else if (blockId === 'charts') {
+                        content = (
                           <DashboardCharts
                             dailyData={dailyData}
                             categoryData={categoryData}
@@ -1654,91 +1562,68 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                             prevLabel={prevRange.label}
                             activeCategory={filters.category}
                             activePo={filters.poNumber}
+                            activePlateKey={filters.plateKey}
+                            canCreateOrder={!isAdmin && !demoMode}
+                            onCreateOrder={!isAdmin && !demoMode ? () => openNewOrder() : undefined}
+                            onEnableDemoMode={
+                              !demoMode
+                                ? () => {
+                                    setDemoMode(true);
+                                    showToast('Đã bật Chế độ dữ liệu mẫu để xem thử biểu đồ.');
+                                  }
+                                : undefined
+                            }
                             onFilterChange={updateFilters}
                             onOpenVehicle={openVehicleProfile}
                           />
-                        </div>
-                      );
-                    } else if (blockId === 'orders_table') {
-                      content = (
-                        <div className="space-y-2">
-                          {effectiveAdminMode && (
-                            <div className="flex items-center justify-end no-print">
-                              <button
-                                type="button"
-                                onClick={() => store.toggleDashboardBlockVisibility('orders_table')}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg glass-tile text-[11px] font-semibold text-slate-600 hover:text-red-700"
-                              >
-                                <EyeOff className="w-3 h-3" />
-                                Ẩn bảng chi tiết phiếu
-                              </button>
-                            </div>
-                          )}
+                        );
+                      } else if (blockId === 'orders_table') {
+                        content = (
                           <OrdersTable
                             orders={currentFiltered.orders}
-                            canModifyOrders={isAdmin}
+                            canModifyOrders={isAdmin && !demoMode}
                             onOpenVehicle={openVehicleProfile}
                             onEditOrder={openEditOrder}
                             onDeleteOrder={(id) => {
-                              if (!isAdmin) return;
+                              if (!isAdmin || demoMode) return;
                               store.deleteOrder(id);
                               showToast('Đã xóa phiếu bảo dưỡng và ghi nhận vào Nhật ký.');
                             }}
                             onFilterByPo={(po) => updateFilters({ poNumber: po })}
-                            onAddNew={!isAdmin ? () => openNewOrder() : undefined}
+                            onAddNew={!isAdmin && !demoMode ? () => openNewOrder() : undefined}
+                            crossFilterChips={crossFilterChips}
+                            onClearAllCrossFilters={resetAllFilters}
                           />
-                        </div>
-                      );
-                    }
+                        );
+                      }
 
-                    return (
-                      <motion.div
-                        key={blockId}
-                        layout="position"
-                        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                        onDragOver={(e) => {
-                          if (!draggingBlockId) return;
-                          e.preventDefault();
-                          if (draggingBlockId !== blockId) {
-                            setDragOverBlockId(blockId);
-                          }
-                        }}
-                        onDragLeave={() => {
-                          if (dragOverBlockId === blockId) setDragOverBlockId(null);
-                        }}
-                        onDrop={(e) => {
-                          if (!draggingBlockId) return;
-                          e.preventDefault();
-                          if (draggingBlockId !== blockId) {
-                            store.reorderDashboardBlocks(draggingBlockId, blockId);
-                          }
-                          setDraggingBlockId(null);
-                          setDragOverBlockId(null);
-                        }}
-                        className={
-                          isDropTarget
-                            ? 'rounded-2xl ring-2 ring-blue-400/80 ring-offset-2 ring-offset-transparent transition-all'
-                            : ''
-                        }
-                      >
-                        {content}
-                      </motion.div>
-                    );
-                  })}
+                      if (!content) return null;
+
+                      return (
+                        <motion.div
+                          key={blockId}
+                          layout="position"
+                          transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                        >
+                          {content}
+                        </motion.div>
+                      );
+                    })
+                  )}
                 </>
               )}
 
               {activePage === 'orders' && (
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-2 no-print">
-                    <div className="inline-flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-200/60">
+                    <div className="inline-flex flex-wrap items-center gap-1.5 p-1.5 rounded-2xl glass-segment">
                       <button
                         type="button"
                         onClick={() => updateFilters({ poNumber: '', serviceType: '' })}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-bold ${
                           !filters.poNumber && !filters.serviceType
-                            ? 'bg-white text-slate-900 shadow-xs'
-                            : 'text-slate-600'
+                            ? 'tab-3d-active'
+                            : 'tab-3d'
                         }`}
                       >
                         Tất cả ({currentFiltered.orders.length})
@@ -1750,10 +1635,10 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                             poNumber: filters.poNumber === '__MISSING__' ? '' : '__MISSING__',
                           })
                         }
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-bold ${
                           filters.poNumber === '__MISSING__'
-                            ? 'bg-amber-600 text-white shadow-xs'
-                            : 'text-amber-800 hover:bg-white/60'
+                            ? 'tab-3d-active-amber'
+                            : 'tab-3d text-amber-900!'
                         }`}
                       >
                         Thiếu số PO
@@ -1768,10 +1653,10 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                                 : 'Sửa chữa đột xuất',
                           })
                         }
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-bold ${
                           filters.serviceType === 'Sửa chữa đột xuất'
-                            ? 'bg-blue-600 text-white shadow-xs'
-                            : 'text-slate-600 hover:bg-white/60'
+                            ? 'tab-3d-active'
+                            : 'tab-3d'
                         }`}
                       >
                         Sửa chữa đột xuất
@@ -1782,7 +1667,7 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                       <button
                         type="button"
                         onClick={() => setImportModalOpen(true)}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl glass-panel text-xs font-semibold text-blue-700 hover:bg-white transition-colors"
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl glass-tile text-xs font-semibold text-blue-800 touch-press"
                       >
                         <Upload className="w-3.5 h-3.5" />
                         Nhập hàng loạt từ Excel / CSV
@@ -1792,18 +1677,20 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
 
                   <OrdersTable
                     orders={currentFiltered.orders}
-                    canModifyOrders={isAdmin}
+                    canModifyOrders={isAdmin && !demoMode}
                     title={`Danh sách phiếu bảo dưỡng — ${currentRange.label}`}
                     subtitle="Bấm vào bất kỳ dòng nào để xem danh sách hạng mục, phụ tùng và số PO"
                     onOpenVehicle={openVehicleProfile}
                     onEditOrder={openEditOrder}
                     onDeleteOrder={(id) => {
-                      if (!isAdmin) return;
+                      if (!isAdmin || demoMode) return;
                       store.deleteOrder(id);
                       showToast('Đã xóa phiếu bảo dưỡng.');
                     }}
                     onFilterByPo={(po) => updateFilters({ poNumber: po })}
-                    onAddNew={!isAdmin ? () => openNewOrder() : undefined}
+                    onAddNew={!isAdmin && !demoMode ? () => openNewOrder() : undefined}
+                    crossFilterChips={crossFilterChips}
+                    onClearAllCrossFilters={resetAllFilters}
                   />
                 </div>
               )}
@@ -1855,10 +1742,10 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
               {activePage === 'po' && (
                 <PoTrackingView
                   filteredItems={currentFiltered.items}
-                  canAssignPo={isAdmin}
+                  canAssignPo={isAdmin && !demoMode}
                   onFilterByPo={handleFilterByPoAndGoDashboard}
                   onAssignPo={(itemId, po) => {
-                    if (!isAdmin) return;
+                    if (!isAdmin || demoMode) return;
                     store.assignPoToItem(itemId, po);
                     showToast(`Đã gắn số PO ${po.trim().toUpperCase()} cho hạng mục.`);
                   }}
@@ -1891,13 +1778,13 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
         </main>
       </div>
 
-      {/* Mobile Fixed Bottom Navigation Bar (< 768px) — omits Dashboard & Settings for role = user */}
+      {/* Mobile Fixed Bottom Navigation Bar (< 768px) */}
       <nav
         aria-label="Điều hướng điện thoại"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 glass-panel-strong border-t border-white/85 px-1.5 pt-1 safe-bottom no-print"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 glass-panel-strong border-x-0! border-b-0! border-t border-white/85! px-1.5 pt-1 safe-bottom no-print shadow-[0_-8px_28px_-10px_rgba(15,23,42,0.18)]"
       >
         <div
-          className="grid gap-0.5 items-stretch"
+          className="grid gap-1.5 items-stretch py-1"
           style={{
             gridTemplateColumns: `repeat(${Math.max(1, visibleNavItems.length)}, minmax(0, 1fr))`,
           }}
@@ -1917,14 +1804,14 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 key={item.id}
                 type="button"
                 onClick={() => navigateToPage(item.id)}
-                className={`relative min-w-0 min-h-[54px] py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all touch-press ${
-                  active ? 'text-blue-700 bg-blue-600/12 font-bold' : 'text-slate-600 font-medium'
+                className={`relative min-w-0 min-h-[54px] py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 font-bold ${
+                  active ? 'tab-3d-active' : 'tab-3d'
                 }`}
               >
                 <span className="relative">
                   <Icon className="w-5 h-5" />
                   {badgeCount > 0 && (
-                    <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] px-1 rounded-full bg-red-600 text-white font-mono text-[9px] font-bold flex items-center justify-center">
+                    <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] px-1 rounded-full bg-red-600 text-white font-mono text-[9px] font-bold flex items-center justify-center shadow-xs">
                       {badgeCount}
                     </span>
                   )}
@@ -1945,14 +1832,52 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 12 }}
-            transition={{ duration: 0.16 }}
-            className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:bottom-6 right-3 md:right-6 left-3 md:left-auto z-50 glass-panel-strong px-4 py-3 rounded-xl border border-emerald-200 shadow-lg flex items-center gap-2 text-xs font-semibold text-slate-900 no-print"
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:bottom-6 right-3 md:right-6 left-3 md:left-auto z-50 glass-panel-strong px-4 py-3 rounded-xl border-emerald-300/80! shadow-xl flex items-center gap-2 text-xs font-semibold text-slate-950 no-print"
           >
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span className="break-words">{toastMsg}</span>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Vehicle Quick Slide-over Drawer */}
+      <VehicleQuickDrawer
+        vehicle={drawerVehicle}
+        allOrders={activeDataset.orders}
+        allItems={activeDataset.items}
+        liveTodayISO={liveDateKey}
+        isFilteredByThisVehicle={Boolean(
+          drawerVehicle &&
+            normalizePlateKey(filters.plateKey) === normalizePlateKey(drawerVehicle.plate)
+        )}
+        canCreateOrderForVehicle={Boolean(
+          drawerVehicle &&
+            !isAdmin &&
+            !demoMode &&
+            isVehicleAssignedToUser(
+              drawerVehicle,
+              user?.id ?? null,
+              profile?.vehicle_plate ?? null
+            )
+        )}
+        onClose={() => setDrawerVehicleId(null)}
+        onToggleFilterByVehicle={handleToggleCrossFilterPlate}
+        onOpenFullProfile={(vid, plate) => {
+          setDrawerVehicleId(null);
+          if (demoMode) {
+            setDemoMode(false);
+            showToast('Đã tắt dữ liệu mẫu để mở hồ sơ xe thật.');
+          }
+          setSelectedVehicleId(vid);
+          if (plate) store.pushRecentPlate(plate);
+          setActivePage('vehicles');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onCreateOrderForVehicle={
+          !isAdmin && !demoMode ? (vid) => openNewOrder(vid) : undefined
+        }
+      />
 
       {/* Modals */}
       <OrderFormModal
@@ -2004,9 +1929,9 @@ function DashboardApp({ onLogout }: { onLogout: () => Promise<void> }) {
       <GlobalSearchModal
         isOpen={searchModalOpen}
         onClose={() => setSearchModalOpen(false)}
-        vehicles={store.vehicles}
-        orders={store.orders}
-        items={store.items}
+        vehicles={activeDataset.vehicles}
+        orders={activeDataset.orders}
+        items={activeDataset.items}
         recentPlates={store.recentPlates}
         onSelectVehicle={openVehicleProfile}
         onFilterByPo={handleFilterByPoAndGoDashboard}

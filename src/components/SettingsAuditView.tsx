@@ -811,7 +811,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
           </div>
 
           <div className="w-full sm:w-auto scroll-snap-x">
-            <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-200/60 min-w-max">
+            <div className="inline-flex items-center gap-1.5 p-1.5 rounded-2xl glass-segment min-w-max">
               {(
                 [
                   { id: 'ALL', label: 'Tất cả' },
@@ -825,10 +825,10 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                   key={t.id}
                   type="button"
                   onClick={() => setFilterAction(t.id)}
-                  className={`px-3 min-h-[38px] sm:min-h-[30px] py-1 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
+                  className={`px-3.5 min-h-[38px] sm:min-h-[32px] py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 ${
                     filterAction === t.id
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
+                      ? 'tab-3d-active'
+                      : 'tab-3d'
                   }`}
                 >
                   {t.label}

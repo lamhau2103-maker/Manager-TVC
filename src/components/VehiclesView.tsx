@@ -964,7 +964,7 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
           </div>
 
           <div className="w-full sm:w-auto scroll-snap-x">
-            <div className="inline-flex items-center gap-1 p-1 rounded-xl glass-segment min-w-max">
+            <div className="inline-flex items-center gap-1.5 p-1.5 rounded-2xl glass-segment min-w-max">
               {(
                 [
                   { id: 'all', label: `Tất cả (${vehicles.length})` },
@@ -977,10 +977,10 @@ export const VehiclesView: React.FC<VehiclesViewProps> = ({
                   key={t.id}
                   type="button"
                   onClick={() => setStatusFilter(t.id)}
-                  className={`min-h-[38px] sm:min-h-[32px] px-3 sm:px-2.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors shrink-0 touch-press ${
+                  className={`min-h-[38px] sm:min-h-[34px] px-3.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 ${
                     statusFilter === t.id
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
+                      ? 'tab-3d-active'
+                      : 'tab-3d'
                   }`}
                 >
                   {t.label}
